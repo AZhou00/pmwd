@@ -8,6 +8,12 @@ from pmwd.boltzmann import growth
 from pmwd.cosmology import E2, H_deriv
 from pmwd.gravity import gravity
 
+#     """Compute the integrated lens weight function for each half-step lens shell
+#     W(\chi) = r(\chi) D_1(\chi) / D_1{\chi_c}
+#     w = \int_{\chi_{n}}^{\chi_{n+1/2}} W(\chi) d\chi
+#     w = \int_{\chi_{n+1/2}}^{\chi_{n+1}} W(\chi) d\chi
+#     Entries of w is the integration result over the range [n, n+1/2], [n+1/2, n+1], ...
+#     It is labeled by the lower integration limit, i.e. [n, n+1/2, n+1, ...]
 
 def _G_D(a, cosmo, conf):
     """Growth factor of ZA canonical velocity in [H_0]."""
@@ -16,9 +22,13 @@ def _G_D(a, cosmo, conf):
 
 def _G_K(a, cosmo, conf):
     """Growth factor of ZA accelerations in [H_0^2]."""
-    return a**3 * E2(a, cosmo) * (
-        growth(a, cosmo, conf, deriv=2)
-        + (2 + H_deriv(a, cosmo)) * growth(a, cosmo, conf, deriv=1)
+    return (
+        a**3
+        * E2(a, cosmo)
+        * (
+            growth(a, cosmo, conf, deriv=2)
+            + (2 + H_deriv(a, cosmo)) * growth(a, cosmo, conf, deriv=1)
+        )
     )
 
 
@@ -77,7 +87,9 @@ def kick(a_acc, a_prev, a_next, ptcl, cosmo, conf):
     return ptcl.replace(vel=vel)
 
 
-def kick_adj(a_acc, a_prev, a_next, ptcl, ptcl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf):
+def kick_adj(
+    a_acc, a_prev, a_next, ptcl, ptcl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf
+):
     """Kick, and particle and cosmology adjoints."""
     factor_valgrad = value_and_grad(kick_factor, argnums=3)
     factor, cosmo_cot_kick = factor_valgrad(a_acc, a_prev, a_next, cosmo, conf)
@@ -140,7 +152,9 @@ def integrate(a_prev, a_next, ptcl, cosmo, conf):
     return ptcl
 
 
-def integrate_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf):
+def integrate_adj(
+    a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf
+):
     """Symplectic integration adjoint for one step."""
     K = D = 0
     a_disp = a_vel = a_acc = a_prev
@@ -148,15 +162,29 @@ def integrate_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, 
         if k != 0:
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
-            ptcl, ptcl_cot, cosmo_cot = kick_adj(a_acc, a_vel, a_vel_next, ptcl, ptcl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf)
+            ptcl, ptcl_cot, cosmo_cot = kick_adj(
+                a_acc,
+                a_vel,
+                a_vel_next,
+                ptcl,
+                ptcl_cot,
+                cosmo,
+                cosmo_cot,
+                cosmo_cot_force,
+                conf,
+            )
             a_vel = a_vel_next
 
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
-            ptcl, ptcl_cot, cosmo_cot = drift_adj(a_vel, a_disp, a_disp_next, ptcl, ptcl_cot, cosmo, cosmo_cot, conf)
+            ptcl, ptcl_cot, cosmo_cot = drift_adj(
+                a_vel, a_disp, a_disp_next, ptcl, ptcl_cot, cosmo, cosmo_cot, conf
+            )
             a_disp = a_disp_next
-            ptcl, ptcl_cot, cosmo_cot_force = force_adj(a_disp, ptcl, ptcl_cot, cosmo, conf)
+            ptcl, ptcl_cot, cosmo_cot_force = force_adj(
+                a_disp, ptcl, ptcl_cot, cosmo, conf
+            )
             a_acc = a_disp
 
     return ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force
@@ -187,7 +215,6 @@ def observe(a_prev, a_next, ptcl, obsvbl, cosmo, conf):
 
 
 def observe_init(a, ptcl, obsvbl, cosmo, conf):
-
     pass
 
 
@@ -226,9 +253,9 @@ def nbody(ptcl, obsvbl, cosmo, conf, reverse=False):
 
 @jit
 def nbody_adj_init(a, ptcl, ptcl_cot, obsvbl_cot, cosmo, conf):
-    #ptcl_cot = observe_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo)
+    # ptcl_cot = observe_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo)
 
-    #ptcl, ptcl_cot = coevolve_adj(a_prev, a_next, ptcl, ptcl_cot, cosmo)
+    # ptcl, ptcl_cot = coevolve_adj(a_prev, a_next, ptcl, ptcl_cot, cosmo)
 
     ptcl, ptcl_cot, cosmo_cot_force = force_adj(a, ptcl, ptcl_cot, cosmo, conf)
 
@@ -238,13 +265,24 @@ def nbody_adj_init(a, ptcl, ptcl_cot, obsvbl_cot, cosmo, conf):
 
 
 @jit
-def nbody_adj_step(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf):
-    #ptcl_cot = observe_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, conf)
+def nbody_adj_step(
+    a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf
+):
+    # ptcl_cot = observe_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, conf)
 
-    #ptcl, ptcl_cot = coevolve_adj(a_prev, a_next, ptcl, ptcl_cot, cosmo, conf)
+    # ptcl, ptcl_cot = coevolve_adj(a_prev, a_next, ptcl, ptcl_cot, cosmo, conf)
 
     ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force = integrate_adj(
-        a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf)
+        a_prev,
+        a_next,
+        ptcl,
+        ptcl_cot,
+        obsvbl_cot,
+        cosmo,
+        cosmo_cot,
+        cosmo_cot_force,
+        conf,
+    )
 
     return ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force
 
@@ -254,10 +292,20 @@ def nbody_adj(ptcl, ptcl_cot, obsvbl_cot, cosmo, conf, reverse=False):
     a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
 
     ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force = nbody_adj_init(
-        a_nbody[-1], ptcl, ptcl_cot, obsvbl_cot, cosmo, conf)
+        a_nbody[-1], ptcl, ptcl_cot, obsvbl_cot, cosmo, conf
+    )
     for a_prev, a_next in zip(a_nbody[:0:-1], a_nbody[-2::-1]):
         ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force = nbody_adj_step(
-            a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, cosmo_cot_force, conf)
+            a_prev,
+            a_next,
+            ptcl,
+            ptcl_cot,
+            obsvbl_cot,
+            cosmo,
+            cosmo_cot,
+            cosmo_cot_force,
+            conf,
+        )
     return ptcl, ptcl_cot, cosmo_cot
 
 
@@ -265,144 +313,16 @@ def nbody_fwd(ptcl, obsvbl, cosmo, conf, reverse):
     ptcl, obsvbl = nbody(ptcl, obsvbl, cosmo, conf, reverse)
     return (ptcl, obsvbl), (ptcl, cosmo, conf)
 
+
 def nbody_bwd(reverse, res, cotangents):
     ptcl, cosmo, conf = res
     ptcl_cot, obsvbl_cot = cotangents
 
-    ptcl, ptcl_cot, cosmo_cot = nbody_adj(ptcl, ptcl_cot, obsvbl_cot, cosmo, conf,
-                                          reverse=reverse)
+    ptcl, ptcl_cot, cosmo_cot = nbody_adj(
+        ptcl, ptcl_cot, obsvbl_cot, cosmo, conf, reverse=reverse
+    )
 
     return ptcl_cot, obsvbl_cot, cosmo_cot, None
 
+
 nbody.defvjp(nbody_fwd, nbody_bwd)
-
-# -------------------------------------------------------------------------- #
-# Ray-tracing
-# -------------------------------------------------------------------------- #
-from pmwd.rays import Rays
-
-def integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf):
-    """Symplectic integration for one step."""
-
-    # symplecticity requires performing the full update of ptcl then ray
-
-    # ptcl update
-    D = K = 0
-    a_disp = a_vel = a_acc = a_prev
-    # conf.symp_splits = ((0, 0.5), (1, 0.5)), 
-    # each 2-tuple contains the drift and then kick coefficients
-    for d, k in conf.symp_splits: 
-        if d != 0:
-            D += d
-            a_disp_next = a_prev * (1 - D) + a_next * D
-            ptcl = drift(a_vel, a_disp, a_disp_next, ptcl, cosmo, conf)
-            a_disp = a_disp_next
-            ptcl = force(a_disp, ptcl, cosmo, conf)
-            a_acc = a_disp
-
-        if k != 0:
-            K += k
-            a_vel_next = a_prev * (1 - K) + a_next * K
-            ptcl = kick(a_acc, a_vel, a_vel_next, ptcl, cosmo, conf)
-            a_vel = a_vel_next
-
-    # ray update, for now we will recompute the potential gradient will later change the api to save and read already computed potential gradient
-    D = K = 0
-    a_disp = a_vel = a_acc = a_prev
-    for d, k in conf.symp_splits: 
-        if d != 0:
-            D += d
-            ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf)
-            a_disp = a_disp_next
-            ray = force_ray(a_disp, ray, cosmo, conf)
-            a_acc = a_disp
-
-        if k != 0:
-            K += k
-            a_vel_next = a_prev * (1 - K) + a_next * K
-            ray = kick_ray(a_acc, a_vel, a_vel_next, ray, cosmo, conf)
-            a_vel = a_vel_next
-    return ptcl
-
-# -------------------------------------------------------------------------- #
-# main raytrace and back-prop function
-# ray-tracing is done during the backward propagation of the matter field evolution
-
-@jit
-def nbody_step_raytrace_bwd(a_prev, a_next, ptcl, obsvbl, ray, cosmo, conf):
-
-    # ray and ptcl will share the same potential gradient computation, and hence their EOMs are integrated togther
-    ptcl,ray = integrate(a_prev, a_next, ptcl, ray, cosmo, conf) 
-
-
-
-
-    # dummy for now
-    # ptcl = coevolve(a_prev, a_next, ptcl, cosmo, conf)
-    # obsvbl = observe(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
-
-    return ptcl, obsvbl, ray
-
-@partial(custom_vjp, nondiff_argnums=(4,))
-def nbody_raytrace_bwd(ptcl, obsvbl, cosmo, conf, reverse=False):
-    """N-body time integration."""
-    a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
-
-    # initialize ray, give initial velocity and zero acceleration (acc may need to change)
-    ray = Rays.gen_grid(conf)
-
-    # initialize the acceleration to ptcl does not do anything else.
-    ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
-
-    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
-        ptcl, obsvbl, ray = nbody_step_raytrace_bwd(a_prev, a_next, ptcl, obsvbl, ray, cosmo, conf)
-
-    return ptcl, obsvbl, ray
-
-# -------------------------------------------------------------------------- #
-def _G_D_ray(a, cosmo, conf):
-    """Growth factor of ZA canonical velocity in [H_0]."""
-    return a**2 * jnp.sqrt(E2(a, cosmo)) * growth(a, cosmo, conf, deriv=1)
-
-
-def _G_K_ray(a, cosmo, conf):
-    """Growth factor of ZA accelerations in [H_0^2]."""
-    return a**3 * E2(a, cosmo) * (
-        growth(a, cosmo, conf, deriv=2)
-        + (2 + H_deriv(a, cosmo)) * growth(a, cosmo, conf, deriv=1)
-    )
-
-def drift_factor_ray(a_vel, a_prev, a_next, cosmo, conf):
-    """Drift time step factor of conf.float_dtype in [1/H_0]."""
-    factor = growth(a_next, cosmo, conf) - growth(a_prev, cosmo, conf)
-    factor /= _G_D(a_vel, cosmo, conf)
-    return factor
-
-def drift_ray(a_vel, a_prev, a_next, ptcl, cosmo, conf):
-    """Drift."""
-    factor = drift_factor(a_vel, a_prev, a_next, cosmo, conf)
-    factor = factor.astype(conf.float_dtype)
-
-    disp = ptcl.disp + ptcl.vel * factor
-
-    return ptcl.replace(disp=disp)
-
-def kick_factor_ray(a_acc, a_prev, a_next, cosmo, conf):
-    """Kick time step factor of conf.float_dtype in [1/H_0]."""
-    factor = _G_D(a_next, cosmo, conf) - _G_D(a_prev, cosmo, conf)
-    factor /= _G_K(a_acc, cosmo, conf)
-    return factor
-
-def kick_ray(a_acc, a_prev, a_next, ptcl, cosmo, conf):
-    """Kick."""
-    factor = kick_factor(a_acc, a_prev, a_next, cosmo, conf)
-    factor = factor.astype(conf.float_dtype)
-
-    vel = ptcl.vel + ptcl.acc * factor
-
-    return ptcl.replace(vel=vel)
-
-def force(a, ptcl, cosmo, conf):
-    """Force."""
-    acc = gravity(a, ptcl, cosmo, conf)
-    return ptcl.replace(acc=acc)

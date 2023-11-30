@@ -28,6 +28,8 @@ class Configuration:
         Lagrangian particle grid cell size in [L].
     ptcl_grid_shape : tuple of int
         Lagrangian particle grid shape, in ``len(ptcl_grid_shape)`` spatial dimensions.
+    ray_grid_shape : tuple of int
+        tuple of length 2
     mesh_shape : int, float, or tuple of int, optional
         Mesh shape. If an int or float, it is used as the 1D mesh to particle grid shape
         ratio, to determine the mesh shape from that of the particle grid. The mesh grid
@@ -100,6 +102,9 @@ class Configuration:
 
     ptcl_spacing: float
     ptcl_grid_shape: Tuple[int, ...]  # tuple[int, ...] for python >= 3.9 (PEP 585)
+    
+    ray_spacing: float
+    ray_grid_shape: Tuple[int, ...]
 
     mesh_shape: Union[float, Tuple[int, ...]] = 1
 
@@ -145,6 +150,10 @@ class Configuration:
 
     chunk_size: int = 2**24
 
+    # other ray tracing parameters
+    z_src: float = 0.2
+    a_src: float = 1 / (1 + z_src)
+    
     def __post_init__(self):
         if self._is_transforming():
             return
@@ -211,6 +220,17 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             return jnp.array(self.ptcl_grid_shape).prod().item()
 
+    @property
+    def ray_cell_area(self):
+        """Pixel area in [rad^2]."""
+        return self.ray_spacing ** 2
+
+    @property
+    def ray_num(self):
+        """Number of rays."""
+        with jax.ensure_compile_time_eval():
+            return jnp.array(self.ray_grid_shape).prod().item()
+        
     @property
     def box_size(self):
         """Simulation box size tuple in [L]."""
@@ -323,3 +343,9 @@ class Configuration:
     def varlin_R(self):
         """Linear matter overdensity variance in a top-hat window of radius R in [L], of ``cosmo_dtype``."""
         return self.var_tophat.y
+
+    @property
+    def obsv_origin_cmv(self):
+        """Used to shift the observer to the center of the x-y plane"""
+        return jnp.array([self.ptcl_grid_shape[0]*self.ptcl_spacing/2, 
+                          self.ptcl_grid_shape[1]*self.ptcl_spacing/2])

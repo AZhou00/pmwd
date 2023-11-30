@@ -107,7 +107,7 @@ class Particles:
         return cls(conf, pmid, disp)
 
     @classmethod
-    def gen_grid(cls, conf, vel=False, acc=False):
+    def gen_grid(cls, conf, vel=False, acc=False): # first initialized in lpt
         """Generate particles on a uniform grid with zero velocities.
 
         Parameters
@@ -119,6 +119,7 @@ class Particles:
             Whether to initialize accelerations to zeros.
 
         """
+        print('fnc: Particles.gen_grid')
         pmid, disp = [], []
         for i, (sp, sm) in enumerate(zip(conf.ptcl_grid_shape, conf.mesh_shape)):
             pmid_1d = jnp.linspace(0, sm, num=sp, endpoint=False)

@@ -46,7 +46,13 @@ def neg_grad(k, pot, spacing):
 
 def gravity(a, ptcl, cosmo, conf):
     """Gravitational accelerations of particles in [H_0^2], solved on a mesh with FFT."""
-    kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype)
+    kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # list of jax.Array
+    # print('fnc: gravity')
+    # print(len(kvec)) # len(kvec) = 3 
+    # kvec has size 3, each of shape, e.g., for mesh_shape=(64, 64, 64)
+    # (64, 1, 1)
+    # (1, 64, 1)
+    # (1, 1, 33)
 
     dens = scatter(ptcl, conf)
     dens -= 1  # overdensity
@@ -58,8 +64,12 @@ def gravity(a, ptcl, cosmo, conf):
     pot = laplace(kvec, dens, cosmo)
 
     acc = []
-    for k in kvec:
+    pot_grad_2d_fs = []
+    for i, k in enumerate(kvec):
         grad = neg_grad(k, pot, conf.cell_size)
+        
+        # read out 2d potential gradient in Fourier space
+        pot_grad_2d_fs.append(grad)
 
         grad = fftinv(grad, shape=conf.mesh_shape)
         grad = grad.astype(conf.float_dtype)  # no jnp.complex32
@@ -67,6 +77,17 @@ def gravity(a, ptcl, cosmo, conf):
         grad = gather(ptcl, conf, grad)
 
         acc.append(grad)
-    acc = jnp.stack(acc, axis=-1)
+        # print(grad.shape) # product(ptcl_grid_shape), e.g., (32^3,)
 
-    return acc
+    acc = jnp.stack(acc, axis=-1)
+    # print(acc.shape) # (len(grad), 3,)
+    pot_grad_2d_fs = jnp.stack(pot_grad_2d_fs, axis=-1)
+    print(pot_grad_2d_fs.shape) # (mesh1, mesh2, mesh3, 2)
+
+    return acc#, pot_grad_2d_fs
+
+# -------------------------------------------------------------------------- #
+# Computing 2d gradient for lensing 
+# -------------------------------------------------------------------------- #
+
+# the raytracing is done during backward evolution of the matter field

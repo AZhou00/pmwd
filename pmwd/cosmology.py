@@ -71,6 +71,8 @@ class Cosmology:
 
     varlin: Optional[Array] = field(default=None, compare=False)
 
+    distance: Optional[Array] = field(default=None, compare=False)
+
     def __post_init__(self):
         if self._is_transforming():
             return
