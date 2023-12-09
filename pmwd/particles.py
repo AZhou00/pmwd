@@ -120,6 +120,7 @@ class Particles:
 
         """
         print('fnc: Particles.gen_grid')
+        # conf.ptcl_grid_shape, conf.mesh_shape = ((16, 16, 32), (32, 32, 64))
         pmid, disp = [], []
         for i, (sp, sm) in enumerate(zip(conf.ptcl_grid_shape, conf.mesh_shape)):
             pmid_1d = jnp.linspace(0, sm, num=sp, endpoint=False)
@@ -127,7 +128,7 @@ class Particles:
             pmid_1d = pmid_1d.astype(conf.pmid_dtype)
             pmid.append(pmid_1d)
 
-            # exact int arithmetic
+            # exact int arithmetic, non-0 when mesh shape is not integer multiple of particle grid
             disp_1d = jnp.arange(sp) * sm - pmid_1d.astype(int) * sp
             disp_1d *= conf.cell_size / sp
             disp_1d = disp_1d.astype(conf.float_dtype)

@@ -15,7 +15,7 @@ def scatter(ptcl, conf, mesh=None, val=None, offset=0, cell_size=None):
     mesh : ArrayLike, optional
         Input mesh. Default is a ``zeros`` array of ``conf.mesh_shape + val.shape[1:]``.
     val : ArrayLike, optional
-        Input values, can be 0D. Default is ``conf.mesh_size / conf.ptcl_num``.
+        Input values, can be 0D. Default is ``conf.mesh_size / conf.ptcl_num(=ptcl_grid's size)``.
     offset : ArrayLike, optional
         Offset of mesh to particle grid. If 0D, the value is used in each dimension.
     cell_size : float, optional
@@ -25,7 +25,6 @@ def scatter(ptcl, conf, mesh=None, val=None, offset=0, cell_size=None):
     -------
     mesh : jax.Array
         Output mesh.
-
     """
     return _scatter(ptcl.pmid, ptcl.disp, conf, mesh, val, offset, cell_size)
 
@@ -47,6 +46,28 @@ def _scatter(pmid, disp, conf, mesh, val, offset, cell_size):
                          f'{mesh.shape[spatial_ndim:]} != {val.shape[1:]}')
 
     remainder, chunks = _chunk_split(ptcl_num, conf.chunk_size, pmid, disp, val)
+
+    carry = conf, mesh, offset, cell_size
+    if remainder is not None:
+        carry = _scatter_chunk(carry, remainder)[0]
+    carry = scan(_scatter_chunk, carry, chunks)[0]
+    mesh = carry[1]
+
+    return mesh
+
+@custom_vjp
+def _scatter_rt(pmid, disp, conf, mesh, val, offset, cell_size):
+    # remove dependence on conf.chunk_size
+    ptcl_num, spatial_ndim = pmid.shape
+
+    val = jnp.asarray(val, dtype=conf.float_dtype)
+    mesh = jnp.asarray(mesh, dtype=conf.float_dtype)
+
+    if mesh.shape[spatial_ndim:] != val.shape[1:]:
+        raise ValueError('channel shape mismatch: '
+                         f'{mesh.shape[spatial_ndim:]} != {val.shape[1:]}')
+
+    remainder, chunks = _chunk_split(ptcl_num, None, pmid, disp, val)
 
     carry = conf, mesh, offset, cell_size
     if remainder is not None:

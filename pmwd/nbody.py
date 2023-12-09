@@ -289,15 +289,18 @@ def integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf):
     # ptcl update
     D = K = 0
     a_disp = a_vel = a_acc = a_prev
+    a_disp_ray = a_vel_ray = a_acc_ray = a_prev
+
     # conf.symp_splits = ((0, 0.5), (1, 0.5)), 
     # each 2-tuple contains the drift and then kick coefficients
+    # so with this conf.symp_splits, we have KDK.
     for d, k in conf.symp_splits: 
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
             ptcl = drift(a_vel, a_disp, a_disp_next, ptcl, cosmo, conf)
             a_disp = a_disp_next
-            ptcl = force(a_disp, ptcl, cosmo, conf)
+            ptcl = force(a_disp, ptcl, cosmo, conf) # update acceleration
             a_acc = a_disp
 
         if k != 0:
@@ -307,22 +310,14 @@ def integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf):
             a_vel = a_vel_next
 
     # ray update, for now we will recompute the potential gradient will later change the api to save and read already computed potential gradient
-    D = K = 0
-    a_disp = a_vel = a_acc = a_prev
-    for d, k in conf.symp_splits: 
-        if d != 0:
-            D += d
-            ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf)
-            a_disp = a_disp_next
-            ray = force_ray(a_disp, ray, cosmo, conf)
-            a_acc = a_disp
+    ray = kick_ray(a_disp_ray, a_vel, a_vel_next, ray, cosmo, conf)
+    ray = drift_ray(a_vel_ray, a_disp, a_disp_next, ray, cosmo, conf)
+    a_disp = a_disp_next
+    ray = force_ray(a_acc_ray, ray, cosmo, conf) # update acceleration
+    a_acc = a_disp
+    ray = kick_ray(a_acc_ray, a_vel, a_vel_next, ray, cosmo, conf)
 
-        if k != 0:
-            K += k
-            a_vel_next = a_prev * (1 - K) + a_next * K
-            ray = kick_ray(a_acc, a_vel, a_vel_next, ray, cosmo, conf)
-            a_vel = a_vel_next
-    return ptcl
+    return ptcl, ray
 
 # -------------------------------------------------------------------------- #
 # main raytrace and back-prop function
@@ -330,12 +325,8 @@ def integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf):
 
 @jit
 def nbody_step_raytrace_bwd(a_prev, a_next, ptcl, obsvbl, ray, cosmo, conf):
-
     # ray and ptcl will share the same potential gradient computation, and hence their EOMs are integrated togther
-    ptcl,ray = integrate(a_prev, a_next, ptcl, ray, cosmo, conf) 
-
-
-
+    ptcl,ray = integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf) 
 
     # dummy for now
     # ptcl = coevolve(a_prev, a_next, ptcl, cosmo, conf)
@@ -353,6 +344,7 @@ def nbody_raytrace_bwd(ptcl, obsvbl, cosmo, conf, reverse=False):
 
     # initialize the acceleration to ptcl does not do anything else.
     ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
+    ray = force_ray(a_nbody[0], ray, cosmo, conf)
 
     for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
         ptcl, obsvbl, ray = nbody_step_raytrace_bwd(a_prev, a_next, ptcl, obsvbl, ray, cosmo, conf)
@@ -402,7 +394,7 @@ def kick_ray(a_acc, a_prev, a_next, ptcl, cosmo, conf):
 
     return ptcl.replace(vel=vel)
 
-def force(a, ptcl, cosmo, conf):
+def force_ray(a, ptcl, cosmo, conf):
     """Force."""
     acc = gravity(a, ptcl, cosmo, conf)
     return ptcl.replace(acc=acc)

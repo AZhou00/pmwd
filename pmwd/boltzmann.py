@@ -68,6 +68,36 @@ def distance(a, cosmo, conf):
     chi = jnp.interp(a, conf.a_nbody, cosmo.distance)
     return chi.astype(float_dtype)
 
+def distance_ad(a, cosmo, conf):
+    """Compute the radialn angular diameter comoving disatnce
+
+    Parameters
+    ----------
+    a : ArrayLike
+        Scale factors.
+    cosmo : Cosmology
+    conf : Configuration
+
+    Returns
+    -------
+    r(chi) : jax.Array
+        Comoving disatnce in Mpc
+
+    Raises
+    ------
+    ValueError
+        If ``cosmo.distance`` table is empty.
+
+    """
+    if cosmo.growth is None:
+        raise ValueError('Distance table is empty. Call distance_tab or boltzmann first.')
+
+    a = jnp.asarray(a)
+    float_dtype = jnp.promote_types(a.dtype, float)
+
+    chi = jnp.interp(a, conf.a_nbody, cosmo.distance)
+    return chi.astype(float_dtype)
+
 def growth(a, cosmo, conf, order=1, deriv=0):
     """Evaluate interpolation of (LPT) growth function or derivative, the n-th
     derivatives of the m-th order growth function :math:`\mathrm{d}^n D_m /

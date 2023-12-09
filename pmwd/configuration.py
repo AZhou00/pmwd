@@ -107,6 +107,7 @@ class Configuration:
     ray_grid_shape: Tuple[int, ...]
 
     mesh_shape: Union[float, Tuple[int, ...]] = 1
+    ray_mesh_shape: Union[float, Tuple[int, ...]] = 1
 
     cosmo_dtype: DTypeLike = jnp.float64
     pmid_dtype: DTypeLike = jnp.int16
@@ -150,14 +151,15 @@ class Configuration:
 
     chunk_size: int = 2**24
 
-    # other ray tracing parameters
-    z_src: float = 0.2
-    a_src: float = 1 / (1 + z_src)
+    # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location 
+    z_rtlim: float = 0.01
+    a_rtlim: float = 1 / (1 + z_rtlim)
     
     def __post_init__(self):
         if self._is_transforming():
             return
 
+        # parse mesh_shape
         if isinstance(self.mesh_shape, (int, float)):
             mesh_shape = tuple(round(s * self.mesh_shape) for s in self.ptcl_grid_shape)
             object.__setattr__(self, 'mesh_shape', mesh_shape)
@@ -168,6 +170,18 @@ class Configuration:
         if any(self.ptcl_grid_shape[0] * sm != self.mesh_shape[0] * sp
                for sp, sm in zip(self.ptcl_grid_shape[1:], self.mesh_shape[1:])):
             raise ValueError('particle and mesh grid aspect ratios differ')
+        
+        # parse ray_mesh_shape
+        if isinstance(self.ray_mesh_shape, (int, float)):
+            ray_mesh_shape = tuple(round(s * self.ray_mesh_shape) for s in self.ray_grid_shape)
+            object.__setattr__(self, 'ray_mesh_shape', ray_mesh_shape)
+        if len(self.ray_grid_shape) != len(self.ray_mesh_shape):
+            raise ValueError('ray and mesh grid dimensions differ')
+        if any(sm < sp for sp, sm in zip(self.ray_grid_shape, self.ray_mesh_shape)):
+            raise ValueError('mesh grid cannot be smaller than particle grid')
+        if any(self.ray_grid_shape[0] * sm != self.ray_mesh_shape[0] * sp
+               for sp, sm in zip(self.ray_grid_shape[1:], self.ray_mesh_shape[1:])):
+            raise ValueError('ray and mesh grid aspect ratios differ')
 
         object.__setattr__(self, 'cosmo_dtype', jnp.dtype(self.cosmo_dtype))
         object.__setattr__(self, 'pmid_dtype', jnp.dtype(self.pmid_dtype))
@@ -258,6 +272,23 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             return jnp.array(self.mesh_shape).prod().item()
 
+
+    @property
+    def ray_cell_size(self):
+        """image plane mesh cell size in [rad]."""
+        return self.ray_spacing * self.ray_grid_shape[0] / self.ray_mesh_shape[0]
+    
+    @property
+    def ray_cell_area(self):
+        """image plane mesh cell area in [rad^2]."""
+        return self.ray_cell_size ** 2
+    
+    @property
+    def ray_mesh_size(self):
+        """Number of image plane mesh grid points."""
+        with jax.ensure_compile_time_eval():
+            return jnp.array(self.ray_mesh_shape).prod().item()
+    
     @property
     def V(self):
         """Velocity unit as [L/T]. Default is 100 km/s."""
@@ -345,7 +376,72 @@ class Configuration:
         return self.var_tophat.y
 
     @property
-    def obsv_origin_cmv(self):
-        """Used to shift the observer to the center of the x-y plane"""
+    def ray_origin(self):
+        """The comoving location of the origin of the observer relative 
+        to the particle mesh. This is used to shift the observer to the center of the x-y-(z=0) plane
+        """
         return jnp.array([self.ptcl_grid_shape[0]*self.ptcl_spacing/2, 
                           self.ptcl_grid_shape[1]*self.ptcl_spacing/2])
+
+    @property
+    def mesh_chi(self):
+        # comoving coordinates of the particle mesh in z direction 
+        # observer at chi = 0, chi increases away from the observer
+        return self.cell_size * jnp.arange(self.mesh_shape[2])
+    
+    @property
+    def lens_mesh_shape(self):
+        """Shape of the lens plane mesh grid.
+        Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane can be computed.
+        The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
+        integrate the lensing potential. 
+        """
+
+        # chi = distance(self.a_nbody, cosmo, conf)
+        # hard code for now:
+        assert self.a_nbody.size == 64
+        chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
+            7388.528,  7114.592,  6851.573,  6598.427,  6354.291,  6118.441,  5890.271,  5669.258,  5454.959,  5246.988,  5045.009,
+            4848.729,  4657.887,  4472.253,  4291.62 ,  4115.804,  3944.635,  3777.959,  3615.635,  3457.532,  3303.526,  3153.503,
+            3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
+            1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
+         591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
+        
+        # the max slice size is defined by the comoving distance covered by one time step update
+        # that includes z_rtlim
+        chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
+        id_chi_upperbound = jnp.where(chi >= chi_rtlim)[0][-1] # chi is decreasingly sorted
+        id_chi_lowerbound = jnp.where(chi <= chi_rtlim)[0][0] # chi is decreasingly sorted
+        delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h
+        len_z = int(delta_chi / self.cell_size * 2 / 3 ) # 1/2 should be good enough, but let's be safe for now
+        return (self.mesh_shape[0], self.mesh_shape[1], len_z)
+    
+    @property
+    def lens_mesh_size(self):
+        """Number of mesh grid points in the lens plane."""
+        with jax.ensure_compile_time_eval():
+            return jnp.array(self.lens_mesh_shape).prod().item()
+        
+
+    # @property
+    # def lens_slice_size(self):
+    #     """Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane.
+    #     in fact we only need 1/2 of what is here, but just to be safe for now...
+    #     """
+    #     # chi = distance(self.a_nbody, cosmo, conf)
+    #     # hard code for now:
+    #     assert self.a_nbody.size == 64
+    #     chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
+    #         7388.528,  7114.592,  6851.573,  6598.427,  6354.291,  6118.441,  5890.271,  5669.258,  5454.959,  5246.988,  5045.009,
+    #         4848.729,  4657.887,  4472.253,  4291.62 ,  4115.804,  3944.635,  3777.959,  3615.635,  3457.532,  3303.526,  3153.503,
+    #         3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
+    #         1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
+    #      591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
+        
+    #     # the max slice size is defined by the comoving distance covered by one time step update
+    #     # that includes z_rtlim
+    #     chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
+    #     id_chi_upperbound = jnp.where(chi >= chi_rtlim)[0][-1] # chi is decreasingly sorted
+    #     id_chi_lowerbound = jnp.where(chi <= chi_rtlim)[0][0] # chi is decreasingly sorted
+    #     delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h
+    #     return int(delta_chi/self.cell_size)

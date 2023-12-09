@@ -14,36 +14,45 @@ from pmwd.cosmology import E2
 from pmwd.util import is_float0_array
 from pmwd.pm_util import enmesh
 
-from pmwd.boltzmann import distance
+from pmwd.boltzmann import distance, distance_ad
+from pmwd.particles import Particles
 
+from jax.scipy.ndimage import map_coordinates
 
 @partial(pytree_dataclass, aux_fields="conf", frozen=True)
 class Rays:
-    """Particle state.
+    """ray state.
 
-    Particles are indexable.
+    Rays are indexable.
 
     Array-likes are converted to ``jax.Array`` of ``conf.pmid_dtype`` or
     ``conf.float_dtype`` at instantiation.
+
+    For rays, the 3d coordinates are defined by the metric \diag(r^2, r^2, 1)(1-2\Phi) where
+    r is the comoving angular diameter distance at the ray's comoving distance \chi, and \Phi is the
+    Newtonian potential. The coordinaes and velocities are defined with respect to this metric, in particular
+    they are not Cartesian. See \ref{} for details.
+
+    Signs. We are at chi = 0. In real life, ray travels to smaller chi. During ray tracing, the tracing is towards
+    larger chi.
 
     Parameters
     ----------
     conf : Configuration
         Configuration parameters.
     pmid : ArrayLike
-        Particle IDs by mesh indices, of signed int dtype. They are the initial values of the rays' Lagrangian 
-        angular positions. The pmid's are mapped to angular coordinates. They also define the main 
-        line-of-sight (LOS) of each ray. It can save memory compared to the raveled particle IDs, e.g., 
-        6 bytes for 3 times int16 versus 8 bytes for uint64. `pos` is the 2d image plane position of the
-        rays. `pos_3d` is the 3d comoving position of the rays.
+        Particle(Ray) IDs by grid indices, of signed int dtype. They are the initial values of the rays'
+        angular positions on the image plane. They also define the main line-of-sight (LOS) of each ray.
+        `pos` is the 2d image plane position of the rays.
+        `pos_3d` is the 3d comoving position of the rays.
     disp : ArrayLike
-        # FIXME after adding the CUDA scatter and gather ops
-        Ray (image plane, angular) displacements from pmid in [rad]. Call
-        ``pos`` for the ray (image plane, angular) positions.
-    vel : ArrayLike, optional
-        Ray canonical (image plane, angular) velocities in [???]. 
-    acc : ArrayLike, optional
-        Ray canonical (image plane, angular) accelerations in [???].
+        Ray (image plane, angular) displacements (relative to the position specified by pmid) in [rad].
+    am: ArrayLike
+        Rays' 2d angular momenta, r(\chi) v; v is the 2d comoving velocity perpendicular to each ray's main LOS.
+        In this formalism, the normalized 3d momentum of a ray is given by (-v/r(\chi), -1+\order(v^2)), the signs
+        are giving by the physical motion of the rays.
+    twirl : ArrayLike
+        Rays' 2d twirl (angular impulse) in unit of \chi, i.e., twirl = \Delta am = torque * \Delta \chi
     attr : pytree, optional
         Particle attributes (custom features).
     """
@@ -51,10 +60,10 @@ class Rays:
     conf: Configuration = field(repr=False)
 
     pmid: ArrayLike
-    disp: ArrayLike # image coordinate displacement, not 3D displacement
-    vel: Optional[ArrayLike] = None
-    acc: Optional[ArrayLike] = None
-    pmid_center: Optional[ArrayLike] = None
+    disp: ArrayLike  # image plane displacement, not 3D displacement
+    am: Optional[ArrayLike] = None # image plane angular momentum
+    twirl: Optional[ArrayLike] = None # image plane twirl (angular impulse or Delta am)
+
     attr: Any = None
 
     def __post_init__(self):
@@ -72,70 +81,65 @@ class Rays:
                     if value is None or is_float0_array(value)
                     else jnp.asarray(value, dtype=dtype)
                 )
-    
-            object.__setattr__(self, name, value)
 
+            object.__setattr__(self, name, value)
 
     def __len__(self):
         return len(self.pmid)
 
     def __getitem__(self, key):
         return tree_map(itemgetter(key), self)
-    
+
     @classmethod
-    def gen_grid(cls, conf, acc=False):
-        """Generate rays on the a=1 observer plane on pixel grid.
+    def gen_grid(cls, conf, am=False, twirl=False):
+        """Generate rays on the a=1 (z=0) observer plane on pixel grid.
 
         Parameters
         ----------
         conf : Configuration
-        vel : bool, optional
-            Whether to initialize velocities to zeros.
-        acc : bool, optional
-            Whether to initialize accelerations to zeros.
-
+        am : bool, optional
+            Whether to initialize angular momenta to zeros.
+        twirl : bool, optional
+            Whether to initialize twirls to zeros.
         """
-        print('fnc: Rays.gen_grid')
+        print("fnc: Rays.gen_grid")
 
-        z_init = 0 # conf.cell_size * (conf.ptcl_grid_shape[-1] - 1)
-        print('initiating rays on the plane Cartesian z =', z_init)
+        z_init = 0.0
+        # print("initiating rays on the plane Cartesian z =", z_init)
 
         pmid, disp = [], []
-        for i, (sp, sm) in enumerate(zip(conf.ray_grid_shape, conf.ray_grid_shape)):
-            # shape of particle of shape of ray mesh
+        for i, (sp, sm) in enumerate(zip(conf.ray_grid_shape, conf.ray_mesh_shape)):
             pmid_1d = jnp.linspace(0, sm, num=sp, endpoint=False)
             pmid_1d = jnp.rint(pmid_1d)
             pmid_1d = pmid_1d.astype(conf.pmid_dtype)
             pmid.append(pmid_1d)
 
-            # exact int arithmetic
-            # disp_1d = jnp.arange(sp) * sm - pmid_1d.astype(int) * sp
-            # disp_1d *= conf.cell_size / sp
-            # just 0
-            disp_1d = jnp.zeros(sp)
+            # exact int arithmetic, non-0 when mesh shape is not integer multiple of particle grid
+            disp_1d = jnp.arange(sp) * sm - pmid_1d.astype(int) * sp
+            disp_1d *= conf.cell_size / sp
             disp_1d = disp_1d.astype(conf.float_dtype)
             disp.append(disp_1d)
-        # print('pmid', pmid)
-        # print('disp', disp)
-
+        
         pmid = jnp.meshgrid(*pmid, indexing="ij")
-        pmid = jnp.stack(pmid, axis=-1).reshape(-1, conf.dim-1)
-        pmid_center = pmid.mean(axis=0)
+        pmid = jnp.stack(pmid, axis=-1).reshape(-1, 2) # image plane is 2d, shape (ray_num, 2)
+        pmid -= pmid.mean(axis=0) # define the image plane origin at the center of the grid
+        print('pmid.shape', pmid.shape)
 
         disp = jnp.meshgrid(*disp, indexing="ij")
-        disp = jnp.stack(disp, axis=-1).reshape(-1, conf.dim-1)
-
-        # print(pmid.shape, disp.shape)
+        disp = jnp.stack(disp, axis=-1).reshape(-1, 2) # image plane is 2d
+        print('disp.shape', disp.shape)
         
         # unit of ???
-        # velocity: the direction is by default point towards the observer (opposite of the tracing direction), hence omitted.
-        vel = jnp.zeros_like(disp) 
-        acc = jnp.zeros_like(disp) if acc else None
+        # angular momentum: the direction is by default point towards the observer (opposite of the tracing direction).
+        # third entry is constrained by the mass-shell condition, = 1 + \order(v^2)
+        am = jnp.zeros_like(disp) if not am else None
+        twirl = jnp.zeros_like(disp) if not twirl else None
+        return cls(conf, pmid, disp, am=am, twirl=twirl)
 
-        return cls(conf, pmid, disp, vel=vel, acc=acc, pmid_center=pmid_center)
-
-    def pos(self, dtype=jnp.float64):
-        """Ray (image plane, angular) positions.
+    def pos_ip(self, dtype=jnp.float64): 
+        #TODO: ask why jnp.64, ok probably becasue we are merging pmid and disp
+        #TODO: maybe 32 for ray tracing is good enough. is this a major issue?
+        """Ray positions on the 2d image plane angular 
 
         Parameters
         ----------
@@ -145,7 +149,7 @@ class Rays:
         Returns
         -------
         pos : jax.Array
-            Ray (image plane, angular) positions in [rad].
+            Ray (image plane, angular) 2d positions in [rad].
 
         Notes
         -----
@@ -154,24 +158,25 @@ class Rays:
         """
         conf = self.conf
 
-        pos = self.pmid.astype(dtype) - self.pmid_center.astype(dtype)
-        pos *= conf.ray_spacing
-        pos += self.disp.astype(dtype)
-        
+        # origin is taken to be the center of the ray grid
+        pos = self.pmid.astype(dtype)
+        pos *= conf.ray_cell_size # note this is not the ray_spaing, but the mesh spacing
+        pos += self.disp.astype(dtype) # disp in [rad]
+
         return pos
-    
-    def pos_3d(self, a, cosmo, dtype=jnp.float64, wrap=True):
+
+    def pos_3d(self, a, cosmo, conf, dtype=jnp.float64, wrap=True):
         """Ray 3d comoving positions, at the a=a slice.
 
         Parameters
         ----------
         a : float
-            Scale factor.
+            scale factor
         dtype : DTypeLike, optional
             Output float dtype.
         wrap : bool, optional
-            Whether to wrap around the periodic boundaries. 
-        
+            Whether to wrap around the periodic boundaries.
+
         Returns
         -------
         pos : jax.Array
@@ -184,17 +189,72 @@ class Rays:
         boundaries if ``wrap`` is ``True``.
         """
         conf = self.conf
+        
+        pos = self.pos(dtype) * distance_ad(a, cosmo, conf) # shape (ray_num, 2)
+        pos += conf.obsv_origin_cmv # observer origin at the center of the particle mesh at z=0
 
-        chi = distance(a, cosmo, conf)
-
-        # x,y coords
-        pos = self.pos(dtype) * chi
-        pos += conf.obsv_origin_cmv
-
-        # z coord
-        pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=chi)
+        pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=distance(a, cosmo, conf))
 
         if wrap:
             pos_3d %= jnp.array(conf.box_size, dtype=dtype)
 
         return pos_3d
+
+    # def gen_traj(self, a0, a1, cosmo, conf, ):
+    #     """Generate a particle grid using the Particle object such that the particle positions 
+    #     interpolate the trajectory of the ray grid between two lens planes
+
+    #     Parameters
+    #     ----------
+    #     a0 : float
+    #         Scale factor of the first lens plane
+    #     a1 : float
+    #         Scale factor of the second lens plane
+    #     conf : Configuration
+
+    #     Returns
+    #     -------
+    #     traj : Particles
+    #         Particle object that interpolates the ray grid between two lens planes
+    #     """
+    #     print("fnc: Rays.gen_traj")
+    #     a_list = jnp.linspace(a0, a1, 5) # the integration will happen in 5 steps (will need to remove loop and make step size smaller)
+    #     traj = []
+    #     for a in a_list: # TODO: remove loop
+    #         # chi = distance(a, cosmo, conf)
+    #         pos_3d = self.pos_3d(a, cosmo)
+    #         traj.append(pos_3d)
+    #     print(traj[0].shape)
+    #     traj = jnp.stack(traj, axis=-1) # shape (ray_num, 3, num_integration steps)
+    #     traj = jnp.swapaxes(traj, 1, 2) # shape (ray_num, num_integration steps, 3)
+
+    #     return traj
+
+    # def gen_los_traj_mesh(self, a0, a1, cosmo, conf, ):
+    #     a_list = jnp.linspace(a0, a1, 5) # the integration will happen in 5 steps (will need to remove loop and make step size smaller)
+    #     traj = []
+    #     for a in a_list: # TODO: remove loop
+    #         # chi = distance(a, cosmo, conf)
+    #         pos_3d = self.pos_3d(a, cosmo)
+    #         traj.append(pos_3d)
+    #     print(traj[0].shape)
+    #     traj = jnp.stack(traj, axis=-1) # shape (ray_num, 3, num_integration steps)
+    #     traj = jnp.swapaxes(traj, 1, 2) # shape (ray_num, num_integration steps, 3)
+
+    #     return traj
+
+    
+
+    #     # traj_grid_shape = (self.ray_grid_shape[0], self.ray_grid_shape[1], 10)
+    #     # ptcl_spacing = self.
+    #     # conf_traj = Configuration(ptcl_spacing, traj_grid_shape, conf.ray_spacing, conf.ray_grid_shape, mesh_shape=conf.mesh_shape)
+        
+    #     # traj = Particles.gen_grid(conf, vel=True)
+    #     # pos = traj.pos()
+
+    #     # traj.replace(disp=disp)
+
+
+
+
+
