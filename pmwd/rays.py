@@ -190,8 +190,8 @@ class Rays:
         """
         conf = self.conf
         
-        pos = self.pos(dtype) * distance_ad(a, cosmo, conf) # shape (ray_num, 2)
-        pos += conf.obsv_origin_cmv # observer origin at the center of the particle mesh at z=0
+        pos = self.pos_ip(dtype) * distance_ad(a, cosmo, conf) # shape (ray_num, 2)
+        pos += conf.ray_origin # observer origin at the center of the particle mesh at z=0
 
         pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=distance(a, cosmo, conf))
 

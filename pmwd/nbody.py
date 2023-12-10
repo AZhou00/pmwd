@@ -4,9 +4,9 @@ from jax import value_and_grad, jit, vjp, custom_vjp
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 
-from pmwd.boltzmann import growth
+from pmwd.boltzmann import growth, distance, distance_ad
 from pmwd.cosmology import E2, H_deriv
-from pmwd.gravity import gravity
+from pmwd.gravity import gravity, lensing
 
 
 def _G_D(a, cosmo, conf):
@@ -281,120 +281,68 @@ nbody.defvjp(nbody_fwd, nbody_bwd)
 # -------------------------------------------------------------------------- #
 from pmwd.rays import Rays
 
-def integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf):
+# ray tracing nbody integration goes backward by default
+# @custom_vjp
+def nbody_ray(ptcl, ray, obsvbl, cosmo, conf):
+    """N-body time integration with ray tracinf updates."""
+    a_nbody = conf.a_nbody_ray #in reverse order up the maximum source redshift
+
+    # initialize ray, give initial velocity and zero acceleration (acc may need to change)
+    # ray = Rays.gen_grid(conf)
+
+    # initialize the acceleration to ptcl does not do anything else.
+    ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
+    # initialize rays
+    ray = force_ray(a_nbody[0], a_nbody[1], ptcl, ray, cosmo, conf)
+
+    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
+        ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
+
+        # TODO: align with conf.symp_splits.
+        # this is hard coded for conf.symp_splits = ((0, 0.5), (1, 0.5))
+        a_i = a_prev
+        a_f = a_prev * (1 - 0.5) + a_next * 0.5
+        ray = integrate_ray(a_i, a_f, ptcl, ray, cosmo, conf)
+    return ptcl, ray, obsvbl 
+
+def force_ray(a_i, a_f, ptcl, ray, cosmo, conf):
+    """twirl on rays."""
+    twirl = lensing(a_i, a_f, ptcl, ray, cosmo, conf)
+    return ray.replace(twirl=twirl)
+
+def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf):
     """Symplectic integration for one step."""
-
     # symplecticity requires performing the full update of ptcl then ray
-
-    # ptcl update
+    # ray update, for now we will recompute the potential gradient will later change the api to save and read already computed potential gradient
     D = K = 0
     a_disp = a_vel = a_acc = a_prev
-    a_disp_ray = a_vel_ray = a_acc_ray = a_prev
-
-    # conf.symp_splits = ((0, 0.5), (1, 0.5)), 
-    # each 2-tuple contains the drift and then kick coefficients
-    # so with this conf.symp_splits, we have KDK.
-    for d, k in conf.symp_splits: 
+    for d, k in conf.symp_splits:
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
-            ptcl = drift(a_vel, a_disp, a_disp_next, ptcl, cosmo, conf)
+            ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf)
             a_disp = a_disp_next
-            ptcl = force(a_disp, ptcl, cosmo, conf) # update acceleration
+            ray= force_ray(a_vel, a_disp, ptcl, ray, cosmo, conf)
             a_acc = a_disp
 
         if k != 0:
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
-            ptcl = kick(a_acc, a_vel, a_vel_next, ptcl, cosmo, conf)
+            ray = kick_ray(ray)
             a_vel = a_vel_next
+    return ray
 
-    # ray update, for now we will recompute the potential gradient will later change the api to save and read already computed potential gradient
-    ray = kick_ray(a_disp_ray, a_vel, a_vel_next, ray, cosmo, conf)
-    ray = drift_ray(a_vel_ray, a_disp, a_disp_next, ray, cosmo, conf)
-    a_disp = a_disp_next
-    ray = force_ray(a_acc_ray, ray, cosmo, conf) # update acceleration
-    a_acc = a_disp
-    ray = kick_ray(a_acc_ray, a_vel, a_vel_next, ray, cosmo, conf)
-
-    return ptcl, ray
-
-# -------------------------------------------------------------------------- #
-# main raytrace and back-prop function
-# ray-tracing is done during the backward propagation of the matter field evolution
-
-@jit
-def nbody_step_raytrace_bwd(a_prev, a_next, ptcl, obsvbl, ray, cosmo, conf):
-    # ray and ptcl will share the same potential gradient computation, and hence their EOMs are integrated togther
-    ptcl,ray = integrate_raytrace(a_prev, a_next, ptcl, ray, cosmo, conf) 
-
-    # dummy for now
-    # ptcl = coevolve(a_prev, a_next, ptcl, cosmo, conf)
-    # obsvbl = observe(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
-
-    return ptcl, obsvbl, ray
-
-@partial(custom_vjp, nondiff_argnums=(4,))
-def nbody_raytrace_bwd(ptcl, obsvbl, cosmo, conf, reverse=False):
-    """N-body time integration."""
-    a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
-
-    # initialize ray, give initial velocity and zero acceleration (acc may need to change)
-    ray = Rays.gen_grid(conf)
-
-    # initialize the acceleration to ptcl does not do anything else.
-    ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
-    ray = force_ray(a_nbody[0], ray, cosmo, conf)
-
-    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
-        ptcl, obsvbl, ray = nbody_step_raytrace_bwd(a_prev, a_next, ptcl, obsvbl, ray, cosmo, conf)
-
-    return ptcl, obsvbl, ray
-
-# -------------------------------------------------------------------------- #
-def _G_D_ray(a, cosmo, conf):
-    """Growth factor of ZA canonical velocity in [H_0]."""
-    return a**2 * jnp.sqrt(E2(a, cosmo)) * growth(a, cosmo, conf, deriv=1)
-
-
-def _G_K_ray(a, cosmo, conf):
-    """Growth factor of ZA accelerations in [H_0^2]."""
-    return a**3 * E2(a, cosmo) * (
-        growth(a, cosmo, conf, deriv=2)
-        + (2 + H_deriv(a, cosmo)) * growth(a, cosmo, conf, deriv=1)
-    )
-
-def drift_factor_ray(a_vel, a_prev, a_next, cosmo, conf):
-    """Drift time step factor of conf.float_dtype in [1/H_0]."""
-    factor = growth(a_next, cosmo, conf) - growth(a_prev, cosmo, conf)
-    factor /= _G_D(a_vel, cosmo, conf)
-    return factor
-
-def drift_ray(a_vel, a_prev, a_next, ptcl, cosmo, conf):
-    """Drift."""
-    factor = drift_factor(a_vel, a_prev, a_next, cosmo, conf)
-    factor = factor.astype(conf.float_dtype)
-
-    disp = ptcl.disp + ptcl.vel * factor
-
-    return ptcl.replace(disp=disp)
-
-def kick_factor_ray(a_acc, a_prev, a_next, cosmo, conf):
-    """Kick time step factor of conf.float_dtype in [1/H_0]."""
-    factor = _G_D(a_next, cosmo, conf) - _G_D(a_prev, cosmo, conf)
-    factor /= _G_K(a_acc, cosmo, conf)
-    return factor
-
-def kick_ray(a_acc, a_prev, a_next, ptcl, cosmo, conf):
+def kick_ray(ray):
     """Kick."""
-    factor = kick_factor(a_acc, a_prev, a_next, cosmo, conf)
-    factor = factor.astype(conf.float_dtype)
+    am = ray.am + ray.twirl
+    return ray.replace(am=am)
 
-    vel = ptcl.vel + ptcl.acc * factor
+def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf):
+    """Drift."""
+    
+    # (chi_{n+1}-\chi_n)/r(\chi_{n+1/2})^2
+    factor = distance(a_next, cosmo, conf) - distance(a_prev, cosmo, conf)
+    factor /= distance_ad(a_vel, cosmo, conf)**2
+    disp = ray.disp + ray.am * factor
 
-    return ptcl.replace(vel=vel)
-
-def force_ray(a, ptcl, cosmo, conf):
-    """Force."""
-    acc = gravity(a, ptcl, cosmo, conf)
-    return ptcl.replace(acc=acc)
+    return ray.replace(disp=disp)

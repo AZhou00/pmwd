@@ -152,7 +152,7 @@ class Configuration:
     chunk_size: int = 2**24
 
     # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location 
-    z_rtlim: float = 0.01
+    z_rtlim: float = 2
     a_rtlim: float = 1 / (1 + z_rtlim)
     
     def __post_init__(self):
@@ -272,7 +272,6 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             return jnp.array(self.mesh_shape).prod().item()
 
-
     @property
     def ray_cell_size(self):
         """image plane mesh cell size in [rad]."""
@@ -288,6 +287,11 @@ class Configuration:
         """Number of image plane mesh grid points."""
         with jax.ensure_compile_time_eval():
             return jnp.array(self.ray_mesh_shape).prod().item()
+    
+    @property #TODO: is there a difference between computing fov using rays/mesh?
+    def ray_mesh_fov(self):
+        """Field of view in [rad]."""
+        return self.ray_cell_size * self.ray_mesh_shape[0], self.ray_cell_size * self.ray_mesh_shape[1]
     
     @property
     def V(self):
@@ -366,6 +370,12 @@ class Configuration:
                             dtype=self.cosmo_dtype)
 
     @property
+    def a_nbody_ray(self):
+        """N-body time integration scale factor steps for backward ray tracing"""
+        index = jnp.argmax(self.a_nbody[::-1]<self.a_rtlim)
+        return self.a_nbody[::-1][:index+1]
+    
+    @property
     def growth_a(self):
         """Growth function scale factors, for both LPT and N-body, of ``cosmo_dtype``."""
         return jnp.concatenate((self.a_lpt, self.a_nbody[1:]))
@@ -422,7 +432,7 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             return jnp.array(self.lens_mesh_shape).prod().item()
         
-
+    
     # @property
     # def lens_slice_size(self):
     #     """Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane.

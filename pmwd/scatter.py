@@ -55,10 +55,18 @@ def _scatter(pmid, disp, conf, mesh, val, offset, cell_size):
 
     return mesh
 
-@custom_vjp
+# @custom_vjp #TODO: No VJP defined for custom_vjp function _scatter_rt using defvjp.
 def _scatter_rt(pmid, disp, conf, mesh, val, offset, cell_size):
     # remove dependence on conf.chunk_size
-    ptcl_num, spatial_ndim = pmid.shape
+    ptcl_num, spatial_ndim = pmid.shape # (lens_mesh_size, 2)
+
+    if val is None:
+        val = conf.ray_mesh_size / conf.ray_num
+    val = jnp.asarray(val, dtype=conf.float_dtype)
+
+    if mesh is None:
+        mesh = jnp.zeros(conf.ray_mesh_shape + val.shape[1:], dtype=conf.float_dtype)
+    mesh = jnp.asarray(mesh, dtype=conf.float_dtype)
 
     val = jnp.asarray(val, dtype=conf.float_dtype)
     mesh = jnp.asarray(mesh, dtype=conf.float_dtype)
@@ -67,12 +75,12 @@ def _scatter_rt(pmid, disp, conf, mesh, val, offset, cell_size):
         raise ValueError('channel shape mismatch: '
                          f'{mesh.shape[spatial_ndim:]} != {val.shape[1:]}')
 
-    remainder, chunks = _chunk_split(ptcl_num, None, pmid, disp, val)
+    remainder, chunks = _chunk_split(ptcl_num, None, pmid, disp, val) # conf.chunk_size -> None
 
     carry = conf, mesh, offset, cell_size
     if remainder is not None:
-        carry = _scatter_chunk(carry, remainder)[0]
-    carry = scan(_scatter_chunk, carry, chunks)[0]
+        carry = _scatter_chunk_rt(carry, remainder)[0]
+    carry = scan(_scatter_chunk_rt, carry, chunks)[0]
     mesh = carry[1]
 
     return mesh
@@ -90,6 +98,31 @@ def _scatter_chunk(carry, chunk):
 
     # multilinear mesh indices and fractions
     ind, frac = enmesh(pmid, disp, conf.cell_size, conf.mesh_shape,
+                       offset, cell_size, spatial_shape, False)
+
+    if val.ndim != 0:
+        val = val[:, jnp.newaxis]  # insert neighbor axis
+
+    # scatter
+    ind = tuple(ind[..., i] for i in range(spatial_ndim))
+    frac = jnp.expand_dims(frac, chan_axis)
+    mesh = mesh.at[ind].add(val * frac)
+
+    carry = conf, mesh, offset, cell_size
+    return carry, None
+
+def _scatter_chunk_rt(carry, chunk):
+    conf, mesh, offset, cell_size = carry
+    pmid, disp, val = chunk
+
+    spatial_ndim = pmid.shape[1]
+
+    spatial_shape = mesh.shape[:spatial_ndim]
+    chan_ndim = mesh.ndim - spatial_ndim
+    chan_axis = tuple(range(-chan_ndim, 0))
+
+    # multilinear mesh indices and fractions
+    ind, frac = enmesh(pmid, disp, conf.ray_cell_size, conf.ray_mesh_shape,
                        offset, cell_size, spatial_shape, False)
 
     if val.ndim != 0:
