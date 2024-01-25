@@ -17,8 +17,6 @@ from pmwd.pm_util import enmesh
 from pmwd.boltzmann import distance, distance_ad
 from pmwd.particles import Particles
 
-from jax.scipy.ndimage import map_coordinates
-
 @partial(pytree_dataclass, aux_fields="conf", frozen=True)
 class Rays:
     """ray state.
@@ -50,9 +48,10 @@ class Rays:
     am: ArrayLike
         Rays' 2d angular momenta, r(\chi) v; v is the 2d comoving velocity perpendicular to each ray's main LOS.
         In this formalism, the normalized 3d momentum of a ray is given by (-v/r(\chi), -1+\order(v^2)), the signs
-        are giving by the physical motion of the rays.
-    twirl : ArrayLike
-        Rays' 2d twirl (angular impulse) in unit of \chi, i.e., twirl = \Delta am = torque * \Delta \chi
+        are giving by the physical motion of the rays. Unit [H_0 L^2] 
+    twirl : ArrayLike 
+        Rays' 2d twirl (angular impulse) in unit of [H_0 L^2], 
+        i.e., twirl = \Delta am = \partial am / \partial \chi * \Delta \chi
     attr : pytree, optional
         Particle attributes (custom features).
     """

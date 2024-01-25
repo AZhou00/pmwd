@@ -48,7 +48,7 @@ def gravity(a, ptcl, cosmo, conf):
     """Gravitational accelerations of particles in [H_0^2], solved on a mesh with FFT."""
     print('fnc: gravity')
 
-    kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype)
+    kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # has unit
 
     dens = scatter(ptcl, conf)
     dens -= 1  # overdensity
@@ -61,7 +61,7 @@ def gravity(a, ptcl, cosmo, conf):
 
     acc = []
     for k in kvec:
-        grad = neg_grad(k, pot, conf.cell_size)
+        grad = neg_grad(k, pot, conf.cell_size) # has unit
         grad = fftinv(grad, shape=conf.mesh_shape)
         grad = grad.astype(conf.float_dtype)  # no jnp.complex32
 
@@ -80,7 +80,7 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     ai: scale factor where the ray tracing begins
     af: scale factor where the ray tracing ends
     """
-    print('fnc: lensing')
+    # print('fnc: lensing')
 
     # assert a_i <= 0.95
     kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype)
@@ -118,7 +118,7 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     # define lens plane mesh coordinates, the particle mesh is defined in regular comoving distance grid
     x = jnp.arange(conf.lens_mesh_shape[0])*conf.cell_size
     y = jnp.arange(conf.lens_mesh_shape[1])*conf.cell_size
-    z = jnp.arange(conf.lens_mesh_shape[2])*conf.cell_size + chi_i 
+    z = jnp.arange(conf.lens_mesh_shape[2])*conf.cell_size + chi_i #TODO chi_i?
     
     # mimicking how the particle grid is set up
     coords = jnp.meshgrid(*[x,y,z], indexing='ij') 
@@ -137,20 +137,23 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     # TODO: add growth factor correction
     # TODO: add r(chi) function, maybe this can be cached
     rchi = coord_z
+    # lensing kernel initialize at 0, then set.
     lens_kernel = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), rchi, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
-
+    # scaling by cell
+    # lens_kernel *= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
+    # lens_kernel /= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.ones_like(coord_z)*1e6) # (conf.lens_mesh_size,)
+    # print(lens_kernel)
+    
     # apply the lens kernel
     grad_mesh = grad_mesh.reshape(-1, 3) # (lens_mesh_size, 3)
-    grad_mesh = jnp.einsum('ij,i->ij', grad_mesh, lens_kernel) # (lens_mesh_size, 3)
+    grad_mesh = jnp.einsum('ij,i->ij', grad_mesh, lens_kernel) # (lens_mesh_size, 3) #TODO: broadcast?
     # drop z axis
     grad_mesh = grad_mesh[:,0:2] # (lens_mesh_size, 2)
     # print('shape of grad_mesh', grad_mesh.shape) # (lens_mesh_size, 2)
     # print('shape of coords', coords.shape) # (lens_mesh_size, 2)
     # print('mesh_shape', conf.ray_mesh_shape + grad_mesh.shape[1:]) # ray_mesh_shape + (2,)
 
-    
     offset = -jnp.array([conf.ray_mesh_fov[0],conf.ray_mesh_fov[1]])/2 #TODO: is this right?
-    
     # _scatter_rt is _scatter without conf.chunk_size dependence
     # ray_mesh_shape + (2,)
     grad_2d = _scatter_rt(
@@ -161,25 +164,42 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
         val = grad_mesh, # (lens_mesh_size, 2)
         offset=offset,
         cell_size=conf.ray_cell_size)
-    print('shape of grad_2d after scatter', grad_2d.shape) 
+    # print('shape of grad_2d after scatter', grad_2d.shape)
 
     # _gather_rt is _gather without conf.chunk_size dependence
-    # (ray_num, 2)
+    # (ray_num, 2) 
     grad_2d = _gather_rt(
         pmid = jnp.zeros_like(ray.pmid).astype(conf.pmid_dtype), 
         disp = ray.pos_ip(), 
         conf = conf, 
         mesh = grad_2d, 
         val = jnp.zeros((conf.ray_num,2)), 
-        offset =offset,
+        offset = offset,
         cell_size = conf.ray_cell_size)
-    print('shape of grad_2d after gather', grad_2d.shape) 
+    # print('shape of grad_2d after gather', grad_2d.shape) 
 
     # this is actually *negative* grad 2d
     grad_2d *= 2 # GR
-    grad_2d *= conf.cell_size # d chi
-    grad_2d /= conf.c_SI # c
-    return grad_2d*50
+    # grad_2d *= conf.cell_size # d chi
+
+    # TODO: scaling
+    # scaling: total volume / volume per cell
+    # rchi_f = chi_f
+    # rchi_i = chi_i
+    # transverse_distance_f = rchi_f * conf.ray_spacing
+    # transverse_distance_i = rchi_i * conf.ray_spacing
+    # # full pyramid - tip of the pyramid
+    # total_volume = (1/3 * transverse_distance_f**2 * chi_f) - (1/3 * transverse_distance_i**2 * chi_i) 
+    # scaling = total_volume / conf.ptcl_cell_vol
+    # print(scaling)
+    # grad_2d /= scaling
+
+    grad_2d /= conf.c_SI
+    grad_2d *= 200
+
+    # TODO: smoothing
+
+    return grad_2d
 
 def slice(chi_i,grad_mesh,cosmo,conf):
     # slice the z(axis=2) range of the mesh

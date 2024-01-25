@@ -406,7 +406,6 @@ class Configuration:
         The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
         integrate the lensing potential. 
         """
-
         # chi = distance(self.a_nbody, cosmo, conf)
         # hard code for now:
         assert self.a_nbody.size == 64

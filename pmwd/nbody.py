@@ -293,16 +293,16 @@ def nbody_ray(ptcl, ray, obsvbl, cosmo, conf):
     # initialize the acceleration to ptcl does not do anything else.
     ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
     # initialize rays
-    ray = force_ray(a_nbody[0], a_nbody[1], ptcl, ray, cosmo, conf)
+    # TODO: align with conf.symp_splits.
+    # this is hard coded for conf.symp_splits = ((0, 0.5), (1, 0.5))
+    a_i = a_nbody[0]
+    a_f = a_nbody[0] * (1 - 0.5) + a_nbody[1] * 0.5
+    ray = force_ray(a_i, a_f, ptcl, ray, cosmo, conf)
 
     for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
         ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
 
-        # TODO: align with conf.symp_splits.
-        # this is hard coded for conf.symp_splits = ((0, 0.5), (1, 0.5))
-        a_i = a_prev
-        a_f = a_prev * (1 - 0.5) + a_next * 0.5
-        ray = integrate_ray(a_i, a_f, ptcl, ray, cosmo, conf)
+        ray = integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf)
     return ptcl, ray, obsvbl 
 
 def force_ray(a_i, a_f, ptcl, ray, cosmo, conf):
@@ -344,5 +344,6 @@ def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf):
     factor = distance(a_next, cosmo, conf) - distance(a_prev, cosmo, conf)
     factor /= distance_ad(a_vel, cosmo, conf)**2
     disp = ray.disp + ray.am * factor
+    print('max drift', jnp.max(jnp.abs( ray.am * factor)))
 
     return ray.replace(disp=disp)
