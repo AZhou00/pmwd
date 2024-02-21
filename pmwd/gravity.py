@@ -56,7 +56,6 @@ def gravity(a, ptcl, cosmo, conf):
     dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype)
 
     dens = fftfwd(dens)  # normalization canceled by that of irfftn below
-
     pot = laplace(kvec, dens, cosmo) # mesh shape in Fourier space
 
     acc = []
@@ -91,7 +90,6 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype)
 
     dens = fftfwd(dens)  # normalization canceled by that of irfftn below
-
     pot = laplace(kvec, dens, cosmo) # mesh shape in Fourier space
     # print('pot.shape', pot.shape)
 
@@ -140,7 +138,7 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     # lensing kernel initialize at 0, then set.
     lens_kernel = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), rchi, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
     # scaling by cell
-    # lens_kernel *= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
+    lens_kernel *= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
     # lens_kernel /= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.ones_like(coord_z)*1e6) # (conf.lens_mesh_size,)
     # print(lens_kernel)
     
