@@ -18,16 +18,16 @@ def distance_tab(cosmo,conf):
     cosmo : Cosmology
         A new instance containing a distance table, in shape
         ``conf.a_nbody.size`` and precision ``cosmo.dtype``.
-    """
-    print('fnc: distance_tab; tabulating chi')
 
     # import pyccl as ccl
     # cosmo = ccl.Cosmology(Omega_c=0.3, Omega_b=0.05,
     #                         h=0.7, n_s=0.96, sigma8=0.8,
     #                         transfer_function='bbks')
-    # return ccl.comoving_radial_distance(cosmo, conf.a_nbody)  # comoving distance in Mpc
-
+    # comoving distance in Mpc
     # chi has the same ordering as conf.a_nbody
+    # return ccl.comoving_radial_distance(cosmo, conf.a_nbody)  
+    """
+    print('fnc: distance_tab; tabulating chi')
 
     assert conf.a_nbody.size == 64
     chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
@@ -38,7 +38,7 @@ def distance_tab(cosmo,conf):
          591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
     return cosmo.replace(distance=chi)
 
-def distance(a, cosmo, conf):
+def distance_cm(a, cosmo, conf):
     """Compute the comoving distances chi(a)
 
     Parameters

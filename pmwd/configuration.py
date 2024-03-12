@@ -8,6 +8,7 @@ from jax.typing import DTypeLike
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 from mcfit import TophatVar
+from pmwd.ray_mesh import compute_ray_mesh,compute_ray_mesh_max
 
 from pmwd.tree_util import pytree_dataclass
 
@@ -102,12 +103,15 @@ class Configuration:
 
     ptcl_spacing: float
     ptcl_grid_shape: Tuple[int, ...]  # tuple[int, ...] for python >= 3.9 (PEP 585)
-    
+
     ray_spacing: float
     ray_grid_shape: Tuple[int, ...]
+    ray_mesh_eps: float = 0.5
+    ray_mesh_p_x: int = 0
+    ray_mesh_p_y: int = 0
 
     mesh_shape: Union[float, Tuple[int, ...]] = 1
-    ray_mesh_shape: Union[float, Tuple[int, ...]] = 1
+    ray_mesh_shape_default: Union[float, Tuple[int, ...]] = 1
 
     cosmo_dtype: DTypeLike = jnp.float64
     pmid_dtype: DTypeLike = jnp.int16
@@ -151,10 +155,10 @@ class Configuration:
 
     chunk_size: int = 2**24
 
-    # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location 
-    z_rtlim: float = 2
+    # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
+    z_rtlim: float = 0.2
     a_rtlim: float = 1 / (1 + z_rtlim)
-    
+
     def __post_init__(self):
         if self._is_transforming():
             return
@@ -170,17 +174,17 @@ class Configuration:
         if any(self.ptcl_grid_shape[0] * sm != self.mesh_shape[0] * sp
                for sp, sm in zip(self.ptcl_grid_shape[1:], self.mesh_shape[1:])):
             raise ValueError('particle and mesh grid aspect ratios differ')
-        
-        # parse ray_mesh_shape
-        if isinstance(self.ray_mesh_shape, (int, float)):
-            ray_mesh_shape = tuple(round(s * self.ray_mesh_shape) for s in self.ray_grid_shape)
-            object.__setattr__(self, 'ray_mesh_shape', ray_mesh_shape)
-        if len(self.ray_grid_shape) != len(self.ray_mesh_shape):
+
+        # parse ray_mesh_shape_default
+        if isinstance(self.ray_mesh_shape_default, (int, float)):
+            ray_mesh_shape_default = tuple(round(s * self.ray_mesh_shape_default) for s in self.ray_grid_shape)
+            object.__setattr__(self, 'ray_mesh_shape_default', ray_mesh_shape_default)
+        if len(self.ray_grid_shape) != len(self.ray_mesh_shape_default):
             raise ValueError('ray and mesh grid dimensions differ')
-        if any(sm < sp for sp, sm in zip(self.ray_grid_shape, self.ray_mesh_shape)):
+        if any(sm < sp for sp, sm in zip(self.ray_grid_shape, self.ray_mesh_shape_default)):
             raise ValueError('mesh grid cannot be smaller than particle grid')
-        if any(self.ray_grid_shape[0] * sm != self.ray_mesh_shape[0] * sp
-               for sp, sm in zip(self.ray_grid_shape[1:], self.ray_mesh_shape[1:])):
+        if any(self.ray_grid_shape[0] * sm != self.ray_mesh_shape_default[0] * sp
+               for sp, sm in zip(self.ray_grid_shape[1:], self.ray_mesh_shape_default[1:])):
             raise ValueError('ray and mesh grid aspect ratios differ')
 
         object.__setattr__(self, 'cosmo_dtype', jnp.dtype(self.cosmo_dtype))
@@ -224,28 +228,6 @@ class Configuration:
         return len(self.ptcl_grid_shape)
 
     @property
-    def ptcl_cell_vol(self):
-        """Lagrangian particle grid cell volume in [L^dim]."""
-        return self.ptcl_spacing ** self.dim
-
-    @property
-    def ptcl_num(self):
-        """Number of particles."""
-        with jax.ensure_compile_time_eval():
-            return jnp.array(self.ptcl_grid_shape).prod().item()
-
-    @property
-    def ray_cell_area(self):
-        """Pixel area in [rad^2]."""
-        return self.ray_spacing ** 2
-
-    @property
-    def ray_num(self):
-        """Number of rays."""
-        with jax.ensure_compile_time_eval():
-            return jnp.array(self.ray_grid_shape).prod().item()
-        
-    @property
     def box_size(self):
         """Simulation box size tuple in [L]."""
         return tuple(self.ptcl_spacing * s for s in self.ptcl_grid_shape)
@@ -257,42 +239,96 @@ class Configuration:
             return jnp.array(self.box_size).prod().item()
 
     @property
-    def cell_size(self):
-        """Mesh cell size in [L]."""
-        return self.ptcl_spacing * self.ptcl_grid_shape[0] / self.mesh_shape[0]
+    def ptcl_cell_vol(self):
+        """Lagrangian particle grid cell volume in [L^dim]."""
+        return self.ptcl_spacing ** self.dim
 
     @property
-    def cell_vol(self):
-        """Mesh cell volume in [L^dim]."""
-        return self.cell_size ** self.dim
+    def ptcl_num(self):
+        """Number of particles."""
+        with jax.ensure_compile_time_eval():
+            return jnp.array(self.ptcl_grid_shape).prod().item()
 
     @property
     def mesh_size(self):
-        """Number of mesh grid points."""
+        """Number of particle mesh grid points."""
         with jax.ensure_compile_time_eval():
             return jnp.array(self.mesh_shape).prod().item()
 
     @property
-    def ray_cell_size(self):
-        """image plane mesh cell size in [rad]."""
-        return self.ray_spacing * self.ray_grid_shape[0] / self.ray_mesh_shape[0]
-    
+    def cell_size(self):
+        """Particle mesh cell size in [L]."""
+        return self.ptcl_spacing * self.ptcl_grid_shape[0] / self.mesh_shape[0]
+
+    @property
+    def cell_vol(self):
+        """Particle mesh cell volume in [L^dim]."""
+        return self.cell_size ** self.dim
+
     @property
     def ray_cell_area(self):
-        """image plane mesh cell area in [rad^2]."""
-        return self.ray_cell_size ** 2
-    
+        """Area of each ray grid cell (pixel area) in [rad^2]."""
+        return self.ray_spacing ** 2
+
     @property
-    def ray_mesh_size(self):
-        """Number of image plane mesh grid points."""
+    def ray_num(self):
+        """Number of rays (pixels)"""
         with jax.ensure_compile_time_eval():
-            return jnp.array(self.ray_mesh_shape).prod().item()
-    
-    @property #TODO: is there a difference between computing fov using rays/mesh?
-    def ray_mesh_fov(self):
-        """Field of view in [rad]."""
-        return self.ray_cell_size * self.ray_mesh_shape[0], self.ray_cell_size * self.ray_mesh_shape[1]
-    
+            return jnp.array(self.ray_grid_shape).prod().item()
+
+    # @property
+    # def ray_mesh_shape_default(self):
+    #     """Maximum ray mesh shape (at r -> \inf, ray spacing resolution limited)"""
+    #     nu_2D, N_2D_x, N_2D_y = compute_ray_mesh_max(
+    #         mu_2D=self.ray_spacing,
+    #         M_2D_x=self.ray_grid_shape[0],
+    #         M_2D_y=self.ray_grid_shape[1],
+    #         eps=self.ray_mesh_eps,
+    #         p_x=self.ray_mesh_p_x,
+    #         p_y=self.ray_mesh_p_y,
+    #     )
+    #     return N_2D_x, N_2D_y
+
+    # @property
+    # def ray_cell_size_default(self):
+    #     """The mesh cell resolution of the Maximum ray mesh"""
+    #     nu_2D = self.ray_mesh_eps * self.ray_spacing
+    #     # nu_2D, N_2D_x, N_2D_y = compute_ray_mesh_max(
+    #     #     mu_2D=self.ray_spacing,
+    #     #     M_2D_x=self.ray_grid_shape[0],
+    #     #     M_2D_y=self.ray_grid_shape[1],
+    #     #     eps=self.ray_mesh_eps,
+    #     #     p_x=self.ray_mesh_p_x,
+    #     #     p_y=self.ray_mesh_p_y,
+    #     # )
+    #     return nu_2D
+
+    @property
+    def ray_cell_size_default(self):
+        """Particle mesh cell size in [L]."""
+        return self.ray_spacing * self.ray_grid_shape[0] / self.ray_mesh_shape_default[0]
+
+    # @property #TODO: is there a difference between computing fov using rays/mesh?
+    # def ray_mesh_fov(self):
+    #     """Field of view in [rad]."""
+    #     return self.ray_cell_size * self.ray_mesh_shape[0], self.ray_cell_size * self.ray_mesh_shape[1]
+
+    # @property
+    # def ray_cell_size(self):
+    #     """image plane mesh cell size in [rad]."""
+    #     return self.ray_spacing * self.ray_grid_shape[0] / self.ray_mesh_shape[0]
+
+    # @property
+    # def ray_cell_area(self):
+    #     """image plane mesh cell area in [rad^2]."""
+    #     return self.ray_cell_size ** 2
+
+    # @property
+    # def ray_mesh_size(self):
+    #     """Number of ray mesh grid points."""
+    #     with jax.ensure_compile_time_eval():
+    #         return jnp.array(self.ray_mesh_shape).prod().item()
+
     @property
     def V(self):
         """Velocity unit as [L/T]. Default is 100 km/s."""
@@ -301,7 +337,7 @@ class Configuration:
     @property
     def H_0(self):
         """Hubble constant H_0 in [1/T]."""
-        return self.H_0_SI * self.T
+        return self.H_0_SI / (1 / self.T)
 
     @property
     def c(self):
@@ -374,7 +410,7 @@ class Configuration:
         """N-body time integration scale factor steps for backward ray tracing"""
         index = jnp.argmax(self.a_nbody[::-1]<self.a_rtlim)
         return self.a_nbody[::-1][:index+1]
-    
+
     @property
     def growth_a(self):
         """Growth function scale factors, for both LPT and N-body, of ``cosmo_dtype``."""
@@ -395,10 +431,10 @@ class Configuration:
 
     @property
     def mesh_chi(self):
-        # comoving coordinates of the particle mesh in z direction 
+        # comoving coordinates of the particle mesh in z direction
         # observer at chi = 0, chi increases away from the observer
         return self.cell_size * jnp.arange(self.mesh_shape[2])
-    
+
     @property
     def lens_mesh_shape(self):
         """Shape of the lens plane mesh grid.
@@ -406,7 +442,8 @@ class Configuration:
         The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
         integrate the lensing potential. 
         """
-        # chi = distance(self.a_nbody, cosmo, conf)
+        # chi has the same ordering as conf.a_nbody
+        # chi = distance_cm(self.a_nbody, cosmo, conf)
         # hard code for now:
         assert self.a_nbody.size == 64
         chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
@@ -415,7 +452,7 @@ class Configuration:
             3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
             1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
          591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
-        
+
         # the max slice size is defined by the comoving distance covered by one time step update
         # that includes z_rtlim
         chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
@@ -424,14 +461,13 @@ class Configuration:
         delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h
         len_z = int(delta_chi / self.cell_size * 2 / 3 ) # 1/2 should be good enough, but let's be safe for now
         return (self.mesh_shape[0], self.mesh_shape[1], len_z)
-    
+
     @property
     def lens_mesh_size(self):
         """Number of mesh grid points in the lens plane."""
         with jax.ensure_compile_time_eval():
             return jnp.array(self.lens_mesh_shape).prod().item()
-        
-    
+
     # @property
     # def lens_slice_size(self):
     #     """Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane.
@@ -446,7 +482,7 @@ class Configuration:
     #         3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
     #         1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
     #      591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
-        
+
     #     # the max slice size is defined by the comoving distance covered by one time step update
     #     # that includes z_rtlim
     #     chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source

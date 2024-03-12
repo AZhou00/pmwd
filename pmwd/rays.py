@@ -14,7 +14,7 @@ from pmwd.cosmology import E2
 from pmwd.util import is_float0_array
 from pmwd.pm_util import enmesh
 
-from pmwd.boltzmann import distance, distance_ad
+from pmwd.boltzmann import distance_cm, distance_ad
 from pmwd.particles import Particles
 
 @partial(pytree_dataclass, aux_fields="conf", frozen=True)
@@ -101,13 +101,9 @@ class Rays:
         twirl : bool, optional
             Whether to initialize twirls to zeros.
         """
-        print("fnc: Rays.gen_grid")
-
-        z_init = 0.0
-        # print("initiating rays on the plane Cartesian z =", z_init)
-
+        # print("fnc: Rays.gen_grid")
         pmid, disp = [], []
-        for i, (sp, sm) in enumerate(zip(conf.ray_grid_shape, conf.ray_mesh_shape)):
+        for i, (sp, sm) in enumerate(zip(conf.ray_grid_shape, conf.ray_mesh_shape_default)):
             pmid_1d = jnp.linspace(0, sm, num=sp, endpoint=False)
             pmid_1d = jnp.rint(pmid_1d)
             pmid_1d = pmid_1d.astype(conf.pmid_dtype)
@@ -115,20 +111,17 @@ class Rays:
 
             # exact int arithmetic, non-0 when mesh shape is not integer multiple of particle grid
             disp_1d = jnp.arange(sp) * sm - pmid_1d.astype(int) * sp
-            disp_1d *= conf.cell_size / sp
+            disp_1d *= conf.ray_cell_size_default / sp
             disp_1d = disp_1d.astype(conf.float_dtype)
             disp.append(disp_1d)
         
         pmid = jnp.meshgrid(*pmid, indexing="ij")
         pmid = jnp.stack(pmid, axis=-1).reshape(-1, 2) # image plane is 2d, shape (ray_num, 2)
         pmid -= pmid.mean(axis=0) # define the image plane origin at the center of the grid
-        print('pmid.shape', pmid.shape)
 
         disp = jnp.meshgrid(*disp, indexing="ij")
         disp = jnp.stack(disp, axis=-1).reshape(-1, 2) # image plane is 2d
-        print('disp.shape', disp.shape)
         
-        # unit of ???
         # angular momentum: the direction is by default point towards the observer (opposite of the tracing direction).
         # third entry is constrained by the mass-shell condition, = 1 + \order(v^2)
         am = jnp.zeros_like(disp) if not am else None
@@ -159,7 +152,7 @@ class Rays:
 
         # origin is taken to be the center of the ray grid
         pos = self.pmid.astype(dtype)
-        pos *= conf.ray_cell_size # note this is not the ray_spaing, but the mesh spacing
+        pos *= conf.ray_cell_size_default # note this is not the ray_spaing, but the mesh spacing
         pos += self.disp.astype(dtype) # disp in [rad]
 
         return pos
@@ -192,7 +185,7 @@ class Rays:
         pos = self.pos_ip(dtype) * distance_ad(a, cosmo, conf) # shape (ray_num, 2)
         pos += conf.ray_origin # observer origin at the center of the particle mesh at z=0
 
-        pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=distance(a, cosmo, conf))
+        pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=distance_cm(a, cosmo, conf))
 
         if wrap:
             pos_3d %= jnp.array(conf.box_size, dtype=dtype)

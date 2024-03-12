@@ -4,7 +4,7 @@ from jax import value_and_grad, jit, vjp, custom_vjp
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 
-from pmwd.boltzmann import growth, distance, distance_ad
+from pmwd.boltzmann import growth, distance_cm, distance_ad
 from pmwd.cosmology import E2, H_deriv
 from pmwd.gravity import gravity, lensing
 
@@ -332,18 +332,21 @@ def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf):
             a_vel = a_vel_next
     return ray
 
+
 def kick_ray(ray):
     """Kick."""
     am = ray.am + ray.twirl
     return ray.replace(am=am)
 
+
 def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf):
     """Drift."""
-    
-    # (chi_{n+1}-\chi_n)/r(\chi_{n+1/2})^2
-    factor = distance(a_next, cosmo, conf) - distance(a_prev, cosmo, conf)
-    factor /= distance_ad(a_vel, cosmo, conf)**2
+
+    # factor = (chi_{n+1}-\chi_n)/r(\chi_{n+1/2})^2/c
+    factor = distance_cm(a_next, cosmo, conf) - distance_cm(a_prev, cosmo, conf)
+    factor /= distance_ad(a_vel, cosmo, conf) ** 2
+    factor /= conf.c
     disp = ray.disp + ray.am * factor
-    print('max drift', jnp.max(jnp.abs( ray.am * factor)))
+    print("max drift [arcmin]", jnp.max(jnp.abs(ray.am * factor) * 3437.75))
 
     return ray.replace(disp=disp)

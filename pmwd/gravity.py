@@ -4,7 +4,11 @@ from jax.lax import dynamic_slice_in_dim
 from pmwd.scatter import scatter,_scatter_rt
 from pmwd.gather import gather, _gather_rt
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
-from pmwd.boltzmann import distance
+from pmwd.boltzmann import distance_cm, distance_ad, growth
+from pmwd.cosmology import E2
+from pmwd.ray_mesh import compute_ray_mesh,ray_mesh_diagnostic
+
+import matplotlib.pyplot as plt
 
 @custom_vjp
 def laplace(kvec, src, cosmo=None):
@@ -73,134 +77,371 @@ def gravity(a, ptcl, cosmo, conf):
     return acc
 
 
+def project(
+    val_mesh3D,
+    coord3D,
+    mesh2D_mesh_shape,
+    mesh2D_cell_size,
+    conf,
+):
+    """
+    Project points on a 3D mesh down to a 2D mesh on the image plane with small angle approximation.
+
+    Args:
+        val_mesh3D: 3D mesh to be projected, shape (N_x * N_y * N_z, N_v)
+        coord3D: 3D comoving coordinates of the 3D mesh, shape (N_x * N_y * N_z, 3)
+        conf: Configuration file,
+    Returns:
+        val_mesh2D: projected 2D mesh, shape (mesh2D_mesh_shape + (N_v,))
+    """
+    # print(val_mesh3D.shape, coord3D.shape, mesh2D_mesh_shape, mesh2D_cell_size)
+    mesh3D_size, N_v = val_mesh3D.shape
+
+    # compute angular coordinates; the projected mesh is centered at x = y = 0
+    # image plane coords
+    # line of sight angular diameter distance
+    # shape (N_x * N_y * N_z,)
+    coordr = coord3D[:, 2]
+    # drop the z coords, shape (N_x * N_y * N_z, 2)
+    coord2D = coord3D[:, 0:2]
+    # shape (N_x * N_y * N_z, 2)
+
+    # divide the first two coordinates by the radial comoving distance
+    # should not use np.where and set coordr=0 entry to 0, because we need to remove these values
+    coord2D /= (coordr + 1e-5)[:, jnp.newaxis]  # shape (N_x * N_y * N_z, 2)
+
+    # mask out the 3D mesh points that falls considerably far away from the lens plane
+    # note mesh2D here is already padded so do not need to pad any further
+    mask = jnp.where(coord2D[:, 0] > mesh2D_mesh_shape[0] * mesh2D_cell_size / 3, 0, 1)
+    mask *= jnp.where(coord2D[:, 0] < -mesh2D_mesh_shape[0] * mesh2D_cell_size / 3, 0, 1)
+    mask *= jnp.where(coord2D[:, 1] > mesh2D_mesh_shape[1] * mesh2D_cell_size / 3, 0, 1)
+    mask *= jnp.where(coord2D[:, 1] < -mesh2D_mesh_shape[1] * mesh2D_cell_size / 3, 0, 1)
+    val_mesh3D = val_mesh3D * mask[:, jnp.newaxis]
+
+    # offset
+    ray_mesh_center = -0.5 * jnp.array(
+        [
+            mesh2D_cell_size * mesh2D_mesh_shape[0],
+            mesh2D_cell_size * mesh2D_mesh_shape[1],
+        ]
+    )
+    print('ray_mesh_center [arcmin]', ray_mesh_center*180/jnp.pi*60)
+
+    # grad_2d = _scatter_rt(
+    #     pmid=jnp.zeros_like(coords).astype(conf.pmid_dtype), # (lens_mesh_size, 2)
+    #     disp=coords, # (lens_mesh_size, 2)
+    #     conf=conf,
+    #     mesh=jnp.zeros(conf.ray_mesh_shape + grad_mesh.shape[1:], dtype=conf.float_dtype), # scatter to ray_mesh_shape
+    #     val = grad_mesh, # (lens_mesh_size, 2)
+    #     offset=offset,
+    #     cell_size=conf.ray_cell_size)
+
+    val_mesh2D = _scatter_rt(
+        # this is place holder; positions of the 3D mesh points are given by 'disp';
+        # shape (N_x * N_y * N_z, 2)
+        pmid=jnp.zeros_like(coord2D).astype(conf.pmid_dtype),
+        # positions of the 3D mesh points
+        # shape (N_x * N_y * N_z, 2)
+        disp=coord2D,
+        conf=conf,
+        # place holder for the 2D mesh
+        mesh=jnp.zeros(mesh2D_mesh_shape + (N_v,), dtype=conf.float_dtype),
+        # values of the 3D mesh points
+        # shape (N_x * N_y * N_z, N_v)
+        val=val_mesh3D,
+        # offset of the 2D mesh relative to the 3D mesh points
+        offset=ray_mesh_center,
+        # cell size of the 2D mesh
+        ray_cell_size=mesh2D_cell_size,
+        ray_mesh_shape=mesh2D_mesh_shape,
+        ray_mesh_size=mesh2D_mesh_shape[0]*mesh2D_mesh_shape[1],
+        ray_num = conf.ray_num,
+
+    )
+    # shape (mesh2D_mesh_shape + (N_v,))
+    return val_mesh2D
+
+
 def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     """
     swirl of light rays on the 2d image plane
-    ai: scale factor where the ray tracing begins
-    af: scale factor where the ray tracing ends
+    a_i: scale factor where the ray tracing begins
+    a_f: scale factor where the ray tracing ends
+    a_c: any scale factor between ai and af, to make the calculation more accurate.
+
+    returns twirl in unit of [rad]
+
+    all calculations follow unit in L=[Mpc] and T=[1/H0]
     """
-    # print('fnc: lensing')
+    # print with aligned text :>15
+    chi_i = distance_cm(a_i, cosmo, conf)
+    chi_f = distance_cm(a_f, cosmo, conf)
+    r_i = distance_ad(a_i, cosmo, conf)
+    r_f = distance_ad(a_f, cosmo, conf)
 
-    # assert a_i <= 0.95
-    kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype)
+    a_c = (a_i + a_f) / 2
+    D_c = growth(a_c, cosmo, conf, order=1, deriv=0)
 
-    dens = scatter(ptcl, conf)
+    print('------------------')
+    print('compute lensing maps')
+    print('------------------')
+    print(f"{'a_i':>15} = {a_i}, {'a_f':>15} = {a_f}")
+    print(f"{'chi_i':>15} = {chi_i}, {'chi_f':>15} = {chi_f}")
+    # print number of particle mesh planes
+    print(f"{'# planes covered':>15} = {(chi_f-chi_i)/conf.cell_size}")
+    # particle mesh ------------------
+    # Compute the corresponding mesh coordinate for the 3D particle mesh
+    # this is how the mesh is set up
+    # x: x coordinates of the 3D mesh, shape (N_x,), x.mean() = 0, unit [L]
+    # y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
+    # r_chi: radial comoving distance, shape (N_z,), unit [L]
+    x = jnp.arange(conf.mesh_shape[0])*conf.cell_size
+    x -= x.mean()
+    y = jnp.arange(conf.mesh_shape[1])*conf.cell_size
+    y -= y.mean()
+    z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
+    r_chi = z #TODO need a r(chi) function
+    # tuple of 3, each has shape (N_x, N_y, N_z)
+    coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
+    # shape (N_x, N_y, N_z, 3)
+    coord3D = jnp.stack(coord3D, axis=-1)
+    assert conf.dim == 3
+    # shape (N_x * N_y * N_z, 3)
+    coord3D = coord3D.reshape(-1, conf.dim)
+
+    # ray mesh ------------------
+    nu_2D, N_2D_x, N_2D_y = compute_ray_mesh(
+        mu_2D=conf.ray_spacing,
+        M_2D_x=conf.ray_grid_shape[0],
+        M_2D_y=conf.ray_grid_shape[1],
+        r_l=r_i,
+        r_u=r_f,
+        l_3D=conf.cell_size,
+        eps=conf.ray_mesh_eps,
+        p_x=conf.ray_mesh_p_x,
+        p_y=conf.ray_mesh_p_y,
+    )
+    print('compute ray mesh')
+    ray_mesh_diagnostic(
+        mu_2D=conf.ray_spacing,
+        M_2D_x=conf.ray_grid_shape[0],
+        M_2D_y=conf.ray_grid_shape[1],
+        r_l=r_i,
+        r_u=r_f,
+        l_3D=conf.cell_size,
+        eps=conf.ray_mesh_eps,
+        p_x=conf.ray_mesh_p_x,
+        p_y=conf.ray_mesh_p_y,
+    )
+    ray_cell_size = nu_2D
+    ray_mesh_shape = (N_2D_x, N_2D_y)
+    print('ray_mesh_shape', (N_2D_x, N_2D_y))
+    print('ray_cell_size [arcmin]', ray_cell_size*180*60/jnp.pi)
+    print('------------------')
+
+    # Fourier space ------------------
+    kvec_ptc = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # unit of [1/Mpc]
+    kvec_ray = fftfreq(ray_mesh_shape, ray_cell_size, dtype=conf.float_dtype)
+
+    # Potential gradient ------------------
+    # RHS of Poisson's equation
+    dens = scatter(ptcl, conf) # mesh_shape
     dens -= 1  # overdensity
+    dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype) 
+    dens *= (cosmo.h)**2 # H0^2 term
+    dens /= a_c # potential is evaluated at the middle of the time step
 
-    dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype)
-
+    # Solve Poisson's equation for the potential
     dens = fftfwd(dens)  # normalization canceled by that of irfftn below
-    pot = laplace(kvec, dens, cosmo) # mesh shape in Fourier space
-    # print('pot.shape', pot.shape)
+    # print('dens.shape', dens.shape) # fft mesh_shape
+    pot = laplace(kvec_ptc, dens, cosmo) # apply -1/k^2 * (...)
+    # print('pot.shape', pot.shape) # fft mesh_shape
 
-    grad_mesh = []
-    for k in kvec:
-        grad = neg_grad(k, pot, conf.cell_size)
+    # Compute the negative gradient of the potential, apply -ik * (...)
+    grad_mesh3D = []
+    for k in kvec_ptc:
+        grad_tmp = neg_grad(k, pot, conf.cell_size)
+        grad_tmp = fftinv(grad_tmp, shape=conf.mesh_shape)
+        grad_tmp = grad_tmp.astype(conf.float_dtype)
+        # print('grad.shape', grad.shape) # mesh_shape
+        grad_mesh3D.append(grad_tmp)
+    grad_mesh3D = jnp.stack(grad_mesh3D, axis=-1) # (mesh_shape + (3,))
 
-        grad = fftinv(grad, shape=conf.mesh_shape)
-        grad = grad.astype(conf.float_dtype)  # no jnp.complex32, mesh_shape
+    # compute lensing kernel on the z axis and broadcast to the x&y axes
+    kernel = jnp.where((z>=chi_i) & (z<=chi_f), 2*r_chi/conf.c, 0) # shape (N_z,)
+    kernel *= jnp.where(z > 0, 1, 0) # 
+    # TODO: add growth factor correction
+    kernel *= jnp.ones_like(r_chi)*D_c/D_c
+    kernel *= jnp.where(r_chi>0, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi**2, 0)
+    # grad_mesh3D shape = (N_x, N_y, N_z, 3)
+    # kernel shape = (N_z,)
+    defl_mesh3D = jnp.einsum('xyzv,z->xyzv', grad_mesh3D, kernel)
+    # only need the x&y gradient
+    defl_mesh3D = defl_mesh3D[...,0:2]
+    defl_mesh3D = defl_mesh3D.reshape(-1, 2) # (mesh_shape + (2,)) -> (mesh_size, 2)
 
-        grad_mesh.append(grad)
+    # project onto lens plane
+    defl_2D = project(
+        val_mesh3D=defl_mesh3D,
+        coord3D=coord3D,
+        mesh2D_mesh_shape=ray_mesh_shape,
+        mesh2D_cell_size=ray_cell_size,
+        conf=conf,
+    )
 
-    grad_mesh = jnp.stack(grad_mesh, axis=-1) # mesh_shape + (3,)
-    # print(grad_mesh.shape) 
+    # diagnostics
+    f,axs = plt.subplots(1,2,figsize=(24,12))
+
+    # plot the comoving space projection of the density field
+    kernel = jnp.where((z >= chi_i) & (z <= chi_f), 1, 0)
+    kernel *= jnp.where(z > 0, 1, 0)
+    print('number of planes in projection:',kernel.sum())
+    dens_vis = scatter(ptcl, conf)
+    dens_vis = jnp.einsum("xyz,z->xyz", dens_vis, kernel)
+    dens_vis = dens_vis.sum(axis=2)
+    xx, yy = jnp.meshgrid(x, y, indexing='ij')
+    axs[0].pcolormesh(xx, yy, dens_vis)
+    axs[0].set_aspect('equal', adjustable='box')
+    axs[0].set_xlabel('x [Mpc]')
+    axs[0].set_ylabel('y [Mpc]')
+    axs[0].set_title('comoving density field projected along z')
+
+    # project density field to the image plane
+    dens_vis = scatter(ptcl, conf)
+    kernel = jnp.where((z >= chi_i) & (z <= chi_f), 1, 0)
+    kernel *= jnp.where(z > 0, 1, 0)
+    dens_vis = jnp.einsum('xyz,z->xyz', dens_vis, kernel)
+    dens_vis = dens_vis.reshape(-1, 1)
+    print('dens_vis.shape', dens_vis.shape)
+    dens_vis = project(
+            val_mesh3D=dens_vis,
+            coord3D=coord3D,
+            mesh2D_mesh_shape=ray_mesh_shape,
+            mesh2D_cell_size=ray_cell_size,
+            conf=conf,
+        )
+    x = jnp.arange(ray_mesh_shape[0])*ray_cell_size
+    x -= x.mean()
+    y = jnp.arange(ray_mesh_shape[1])*ray_cell_size
+    y -= y.mean()
+    xx, yy = jnp.meshgrid(x, y, indexing='ij')
+    xx *= 180/jnp.pi*60
+    yy *= 180/jnp.pi*60
+    axs[1].pcolormesh(xx, yy, dens_vis.squeeze())
+    # quiver plot of defl_2D
+    axs[1].quiver(xx, yy, defl_2D[...,0], defl_2D[...,1])
+    axs[1].set_aspect('equal', adjustable='box')
+    # field of view
+    fov = [
+        conf.ray_grid_shape[0] * conf.ray_spacing * 180 / jnp.pi * 60,
+        conf.ray_grid_shape[1] * conf.ray_spacing * 180 / jnp.pi * 60,
+    ]
+    fov_padded = [
+        ray_mesh_shape[0] * ray_cell_size * 180 / jnp.pi * 60,
+        ray_mesh_shape[1] * ray_cell_size * 180 / jnp.pi * 60,
+    ]
+    print("field of view [arcmin]:", fov[0], fov[1])
+    print("padded field of view [arcmin]:", fov_padded[0], fov_padded[1])
+    # now draw white square at x,y = +- fov/2
+    axs[1].plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
+    axs[1].plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
+    axs[1].plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+    axs[1].plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+    # axs[1].set_xlim(-fov[0] / 2, fov[0] / 2)
+    # axs[1].set_ylim(-fov[1] / 2, fov[1] / 2)
+    axs[1].set_xlabel('x [arcmin]')
+    axs[1].set_ylabel('y [arcmin]')
+    axs[1].set_title('deflection field & density angular proj')
+
+
+    plt.show()
 
     # ------------------ lensing ------------------
-    # print('scattering to 2d grid using _scatter_rt')
-    chi_i = distance(a_i, cosmo, conf)
-    chi_f = distance(a_f, cosmo, conf)
+    # # query the lens plane
+    # slice_flag = False
+    # if slice_flag:
+    #     grad_mesh = slice(chi_i,grad_mesh,cosmo,conf)  # lens_mesh_shape + (3,)
 
-    # query the lens plane
-    grad_mesh = slice(chi_i,grad_mesh,cosmo,conf)  # lens_mesh_shape + (3,)
+    #     # define lens plane mesh comoving coordinates,
+    #     # the particle mesh is defined in regular comoving distance grid
+    #     x = jnp.arange(conf.lens_mesh_shape[0])*conf.cell_size
+    #     y = jnp.arange(conf.lens_mesh_shape[1])*conf.cell_size
+    #     z = jnp.arange(conf.lens_mesh_shape[2])*conf.cell_size + chi_i #TODO chi_i?
 
-    # define lens plane mesh coordinates, the particle mesh is defined in regular comoving distance grid
-    x = jnp.arange(conf.lens_mesh_shape[0])*conf.cell_size
-    y = jnp.arange(conf.lens_mesh_shape[1])*conf.cell_size
-    z = jnp.arange(conf.lens_mesh_shape[2])*conf.cell_size + chi_i #TODO chi_i?
-    
-    # mimicking how the particle grid is set up
-    coords = jnp.meshgrid(*[x,y,z], indexing='ij') 
-    coords = jnp.stack(coords, axis=-1).reshape(-1, conf.dim)  # shape (conf.lens_mesh_size, 3)
-    coord_z = coords[:,2] # shape (conf.lens_mesh_size,)
-    # print('shape of coord_z', coord_z.shape)
+    #     # compute the 3D comoving coordinates of the potential mesh
+    #     # mimicking how the particle grid is set up
+    #     coords = jnp.meshgrid(*[x,y,z], indexing='ij')
+    #     coords = jnp.stack(coords, axis=-1).reshape(-1, conf.dim)  # shape (conf.lens_mesh_size, 3)
+    #     coord_z = coords[:,2] # shape (conf.lens_mesh_size,)
+    #     r_chi = coord_z # TODO: add r(chi) function, maybe this can be cached
+    #     # print('shape of coord_z_angular_diam', coord_z_angular_diam.shape)
 
-    # compute the 2d image plane coordiante of each 3d mesh point
-    coords -= jnp.array([conf.ray_origin[0], conf.ray_origin[1], 0])
-    coords /= (coord_z+1e-2)[:,jnp.newaxis] # shape (conf.lens_mesh_size, 3) TODO: stability at coord_z=0
-    # print(jnp.unique(coords))
-    coords = coords[:,0:2] # drop the z coords, shape (lens_mesh_size, 2)
-    # print(jnp.unique(coords))
+    #     # compute the 2d image plane coordiante of each 3d mesh point
+    #     coords -= jnp.array([conf.ray_origin[0], conf.ray_origin[1], 0])
+    #     coords /= (r_chi+1e-2)[:,jnp.newaxis] # shape (conf.lens_mesh_size, 3) TODO: stability at coord_z=0
+    #     # print(jnp.unique(coords))
+    #     coord2D = coords[:,0:2] # drop the z coords, shape (lens_mesh_size, 2)
+    #     # print(jnp.unique(coords))
 
-    # compute lens kernel as a function radial comoving distance
-    # TODO: add growth factor correction
-    # TODO: add r(chi) function, maybe this can be cached
-    rchi = coord_z
-    # lensing kernel initialize at 0, then set.
-    lens_kernel = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), rchi, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
-    # scaling by cell
-    lens_kernel *= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.zeros_like(coord_z)) # (conf.lens_mesh_size,)
-    # lens_kernel /= jnp.where(rchi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / rchi**2, jnp.ones_like(coord_z)*1e6) # (conf.lens_mesh_size,)
-    # print(lens_kernel)
-    
-    # apply the lens kernel
-    grad_mesh = grad_mesh.reshape(-1, 3) # (lens_mesh_size, 3)
-    grad_mesh = jnp.einsum('ij,i->ij', grad_mesh, lens_kernel) # (lens_mesh_size, 3) #TODO: broadcast?
-    # drop z axis
-    grad_mesh = grad_mesh[:,0:2] # (lens_mesh_size, 2)
-    # print('shape of grad_mesh', grad_mesh.shape) # (lens_mesh_size, 2)
-    # print('shape of coords', coords.shape) # (lens_mesh_size, 2)
-    # print('mesh_shape', conf.ray_mesh_shape + grad_mesh.shape[1:]) # ray_mesh_shape + (2,)
+    # val_2d = project(val_mesh3D=grad_mesh, x=x, y=y, r_chi=z, mesh2D_mesh_shape, mesh2D_cell_size, conf=conf, dim=conf.dim, )
 
-    offset = -jnp.array([conf.ray_mesh_fov[0],conf.ray_mesh_fov[1]])/2 #TODO: is this right?
-    # _scatter_rt is _scatter without conf.chunk_size dependence
-    # ray_mesh_shape + (2,)
-    grad_2d = _scatter_rt(
-        pmid=jnp.zeros_like(coords).astype(conf.pmid_dtype), # (lens_mesh_size, 2)
-        disp=coords, # (lens_mesh_size, 2)
-        conf=conf, 
-        mesh=jnp.zeros(conf.ray_mesh_shape + grad_mesh.shape[1:], dtype=conf.float_dtype), # scatter to ray_mesh_shape 
-        val = grad_mesh, # (lens_mesh_size, 2)
-        offset=offset,
-        cell_size=conf.ray_cell_size)
-    # print('shape of grad_2d after scatter', grad_2d.shape)
+    # # compute lens kernel as a function radial comoving distance
+    # # TODO: add growth factor correction
+    # # for mesh point outside the lens plane, the kernel is set to 0
+    # lens_kernel = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), 2*r_chi/conf.c, 0) # (conf.lens_mesh_size,)
+    # # scaling by cell
+    # lens_kernel *= jnp.where(r_chi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / r_chi**2, 0) # (conf.lens_mesh_size,)
+    # # lens_kernel /= jnp.where(r_chi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / r_chi**2, jnp.ones_like(coord_z)*1e6) # (conf.lens_mesh_size,)
+    # # print(lens_kernel)
+
+    # # apply the lens kernel
+    # grad_mesh = grad_mesh.reshape(-1, 3) # (lens_mesh_SHAPE + (3,)) -> (lens_mesh_size, 3)
+    # # only need grad in x & y directions
+    # grad_mesh = grad_mesh[:,0:2] # (lens_mesh_size, 2)
+    # grad_mesh = jnp.einsum('ij,i->ij', grad_mesh, lens_kernel) # (lens_mesh_size, 2)
+    # # print('shape of grad_mesh', grad_mesh.shape) # (lens_mesh_size, 2)
+    # # print('shape of coords', coords.shape) # (lens_mesh_size, 2)
+    # # print('mesh_shape', conf.ray_mesh_shape + grad_mesh.shape[1:]) # ray_mesh_shape + (2,)
+
+    # # diagnostics
+    # # plot density field in this slice
+    # dens_vis = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), jnp.ones_like(coord_z), 0)
+    # dens_vis = dens_vis.sum(axis=2)
+    # plt.imshow
+
+    # offset = -jnp.array([conf.ray_mesh_fov[0],conf.ray_mesh_fov[1]])/2 #TODO: is this right?
+    # # _scatter_rt is _scatter without conf.chunk_size dependence
+    # # ray_mesh_shape + (2,)
+    # grad_2d = _scatter_rt(
+    #     pmid=jnp.zeros_like(coords).astype(conf.pmid_dtype), # (lens_mesh_size, 2)
+    #     disp=coords, # (lens_mesh_size, 2)
+    #     conf=conf,
+    #     mesh=jnp.zeros(conf.ray_mesh_shape + grad_mesh.shape[1:], dtype=conf.float_dtype), # scatter to ray_mesh_shape
+    #     val = grad_mesh, # (lens_mesh_size, 2)
+    #     offset=offset,
+    #     cell_size=conf.ray_cell_size)
+    # print('shape of grad_2d after scatter', grad_2d.shape) # ray_mesh_shape + (2,)
+
+    # deconvolution and smoothing
+    # kvec_ray = fftfreq(conf.ray_mesh_shape, conf.ray_cell_size, dtype=conf.float_dtype)
+    # print('kvec_ray.shape', kvec_ray[0].shape,len(kvec_ray))
 
     # _gather_rt is _gather without conf.chunk_size dependence
-    # (ray_num, 2) 
-    grad_2d = _gather_rt(
+    # (ray_num, 2)
+    defl_2D = _gather_rt(
         pmid = jnp.zeros_like(ray.pmid).astype(conf.pmid_dtype), 
         disp = ray.pos_ip(), 
         conf = conf, 
-        mesh = grad_2d, 
+        mesh = defl_2D, 
         val = jnp.zeros((conf.ray_num,2)), 
-        offset = offset,
+        # offset = offset,
         cell_size = conf.ray_cell_size)
-    # print('shape of grad_2d after gather', grad_2d.shape) 
+    print('shape of grad_2d after gather', grad_2d.shape)
 
-    # this is actually *negative* grad 2d
-    grad_2d *= 2 # GR
-    # grad_2d *= conf.cell_size # d chi
-
-    # TODO: scaling
-    # scaling: total volume / volume per cell
-    # rchi_f = chi_f
-    # rchi_i = chi_i
-    # transverse_distance_f = rchi_f * conf.ray_spacing
-    # transverse_distance_i = rchi_i * conf.ray_spacing
-    # # full pyramid - tip of the pyramid
-    # total_volume = (1/3 * transverse_distance_f**2 * chi_f) - (1/3 * transverse_distance_i**2 * chi_i) 
-    # scaling = total_volume / conf.ptcl_cell_vol
-    # print(scaling)
-    # grad_2d /= scaling
-
-    grad_2d /= conf.c_SI
-    grad_2d *= 200
-
-    # TODO: smoothing
-
-    return grad_2d
+    return defl_2D
 
 def slice(chi_i,grad_mesh,cosmo,conf):
-    # slice the z(axis=2) range of the mesh
+    # take a slice (of fixed size) of the potential gradient mesh along the z(axis=2) axis
     # chi_i: where the light ray starts at this time step
     start_index = jnp.argmax(conf.mesh_chi>=chi_i) # will integrate the density fields that >= chi(a_start)
     return dynamic_slice_in_dim(grad_mesh, start_index, slice_size=conf.lens_mesh_shape[2], axis=2)
