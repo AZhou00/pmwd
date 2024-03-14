@@ -8,7 +8,6 @@ from jax.typing import DTypeLike
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 from mcfit import TophatVar
-from pmwd.ray_mesh import compute_ray_mesh,compute_ray_mesh_max
 
 from pmwd.tree_util import pytree_dataclass
 
@@ -106,7 +105,7 @@ class Configuration:
 
     ray_spacing: float
     ray_grid_shape: Tuple[int, ...]
-    ray_mesh_eps: float = 0.5
+    ray_mesh_eps: float = 1
     ray_mesh_p_x: int = 0
     ray_mesh_p_y: int = 0
 
@@ -156,7 +155,7 @@ class Configuration:
     chunk_size: int = 2**24
 
     # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
-    z_rtlim: float = 0.2
+    z_rtlim: float = 0.3
     a_rtlim: float = 1 / (1 + z_rtlim)
 
     def __post_init__(self):

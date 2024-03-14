@@ -168,18 +168,20 @@ def deconv_tophat(kvec, width, field):
     """perform 2D sinc^2 deconv in Fourier space. kvec from sparse meshgrid."""
     kx = kvec[0]
     ky = kvec[1]
-    kernel = jnp.sinc(kx * width / 2) ** 2
-    kernel *= jnp.sinc(ky * width / 2) ** 2
+    kernel = jnp.sinc(kx * width / 2 / jnp.pi) ** 2
+    kernel *= jnp.sinc(ky * width / 2 / jnp.pi) ** 2
+    field = jnp.where(kernel != 0, field / kernel, 0)
     # plt.plot(kx[:,0],kernel[:,0 ])
     # plt.show()
     # plt.plot(ky[1],jnp.sinc(ky[1] * width / 2) ** 2)
     # plt.show()
-    field = jnp.where(kernel != 0, field / kernel, 0)
-    xx,yy = jnp.meshgrid(kx[:,0],ky[1],indexing='ij')
+    # xx,yy = jnp.meshgrid(kx[:,0],ky[1],indexing='ij')
     # plt.imshow(kernel)
-    plt.pcolormesh(xx,yy,kernel)
-    plt.colorbar()
-    plt.show()
+    # plt.colorbar()
+    # plt.show()
+    # plt.pcolormesh(xx,yy,kernel)
+    # plt.colorbar()
+    # plt.show()
     return field
 
 
@@ -210,7 +212,7 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     all calculations follow unit in L=[Mpc] and T=[1/H0]
     """
 
-    diagnostic = True
+    diagnostic = False
 
     # print with aligned text :>15
     chi_i = distance_cm(a_i, cosmo, conf)
@@ -240,7 +242,7 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     y -= y.mean()
     z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
 
-    print(y.max(), y.min(), z.max(), z.min())
+    # print(y.max(), y.min(), z.max(), z.min())
     r_chi = z #TODO need a r(chi) function
     # tuple of 3, each has shape (N_x, N_y, N_z)
     coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
@@ -335,10 +337,11 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     defl_2D_fft_x = fftfwd(defl_2D[...,0])  # normalization canceled by that of irfftn below
     defl_2D_fft_y = fftfwd(defl_2D[...,1])  # normalization canceled by that of irfftn below
     # smooth with smoothing_tophat smoothing_gaussian
-    # defl_2D_fft_x = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_x)
-    # defl_2D_fft_y = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_y)
-    defl_2D_fft_x = smoothing_gaussian(kvec_ray, conf.ray_spacing, defl_2D_fft_x)
-    defl_2D_fft_y = smoothing_gaussian(kvec_ray, conf.ray_spacing, defl_2D_fft_y)
+    defl_2D_fft_x = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_x)
+    defl_2D_fft_y = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_y)
+    smoothing_width = jnp.max(jnp.array([ray_cell_size, conf.ray_spacing]))
+    defl_2D_fft_x = smoothing_gaussian(kvec_ray, smoothing_width, defl_2D_fft_x)
+    defl_2D_fft_y = smoothing_gaussian(kvec_ray, smoothing_width, defl_2D_fft_y)
     defl_2D_x = fftinv(defl_2D_fft_x, shape=ray_mesh_shape)
     defl_2D_y = fftinv(defl_2D_fft_y, shape=ray_mesh_shape)
     defl_2D_smth = jnp.stack([defl_2D_x, defl_2D_y], axis=-1)
@@ -362,6 +365,8 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
         ray_mesh_shape = ray_mesh_shape
         )
     print('shape of twirl after gather', twirl.shape)
+
+    visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
 
     if diagnostic:
         # x_ptcl, y_ptcl, z_ptcl = ptcl.pos().T
@@ -477,7 +482,7 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
 
     return twirl
 
-def visual_nbody():
+def visual_nbody(ptcl,ray,a_i,cosmo,conf):
     x_ptcl, y_ptcl, z_ptcl = ptcl.pos().T
     x_ray, y_ray, z_ray = ray.pos_3d(a_i, cosmo, conf, wrap=True).T
     f = plt.figure(figsize=(15, 15))
@@ -486,45 +491,55 @@ def visual_nbody():
     plt.close(f)
     return
 
-def visual_nbody_proj(ptcl, conf, x,y,chi, chi_i, chi_f):
+
+def visual_nbody_proj(ptcl, conf, x, y, chi, chi_i, chi_f):
+
     # plot the comoving space projection of the density field
+    xx, yy = jnp.meshgrid(x, y, indexing="ij")
+
     kernel = jnp.where((chi >= chi_i) & (chi <= chi_f), 1, 0)
     kernel *= jnp.where(chi > 0, 1, 0)
-    print('number of planes in projection:',kernel.sum())
+    print("number of planes in projection:", kernel.sum())
+
     dens_vis = scatter(ptcl, conf)
     dens_vis = jnp.einsum("xyz,z->xyz", dens_vis, kernel)
     dens_vis = dens_vis.sum(axis=2)
-    xx, yy = jnp.meshgrid(x, y, indexing='ij')
+
     # log norm with cut off
-    print('max dens:',dens_vis.max(), 'min dens:',dens_vis.min())
-    plt.show().pcolormesh(xx, yy, dens_vis, norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
-    plt.show().set_aspect('equal', adjustable='box')
-    plt.show().set_xlabel('x [Mpc]')
-    plt.show().set_ylabel('y [Mpc]')
-    plt.show().set_title('comoving density field projected along z',fontsize=20)
+    print("max dens:", dens_vis.max(), "min dens:", dens_vis.min())
+    plt.show().pcolormesh(
+        xx, yy, dens_vis, norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000)
+    )
+    plt.show().set_aspect("equal", adjustable="box")
+    plt.show().set_xlabel("x [Mpc]")
+    plt.show().set_ylabel("y [Mpc]")
+    plt.show().set_title("comoving density field projected along z", fontsize=20)
     plt.show()
+
     return
 
-def visual_lensing(ptcl, defl_2D, defl_2D_smth, conf, x,y,chi, chi_i, chi_f, ray_mesh_shape, ray_cell_size):
+
+def visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, chi, chi_i, chi_f, ray_mesh_shape, ray_cell_size):
     
-    f,axs = plt.subplots(2,3,figsize=(36,24))
+    f,axs = plt.subplots(2,3,figsize=(36,24),sharex=True,sharey=True)
 
-    # plot the comoving space projection of the density field
-    kernel = jnp.where((chi >= chi_i) & (chi <= chi_f), 1, 0)
-    kernel *= jnp.where(chi > 0, 1, 0)
-    print('number of planes in projection:',kernel.sum())
-    dens_vis = scatter(ptcl, conf)
-    dens_vis = jnp.einsum("xyz,z->xyz", dens_vis, kernel)
-    dens_vis = dens_vis.sum(axis=2)
-    xx, yy = jnp.meshgrid(x, y, indexing='ij')
-    # log norm with cut off
-    print('max dens:',dens_vis.max(), 'min dens:',dens_vis.min())
-    axs[0].pcolormesh(xx, yy, dens_vis, norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
-    axs[0].set_aspect('equal', adjustable='box')
-    axs[0].set_xlabel('x [Mpc]')
-    axs[0].set_ylabel('y [Mpc]')
-    axs[0].set_title('comoving density field projected along z',fontsize=20)
+    # # plot the comoving space projection of the density field
+    # kernel = jnp.where((chi >= chi_i) & (chi <= chi_f), 1, 0)
+    # kernel *= jnp.where(chi > 0, 1, 0)
+    # print('number of planes in projection:',kernel.sum())
+    # dens_vis = scatter(ptcl, conf)
+    # dens_vis = jnp.einsum("xyz,z->xyz", dens_vis, kernel)
+    # dens_vis = dens_vis.sum(axis=2)
+    # xx, yy = jnp.meshgrid(x, y, indexing='ij')
+    # # log norm with cut off
+    # print('max dens:',dens_vis.max(), 'min dens:',dens_vis.min())
+    # axs[0].pcolormesh(xx, yy, dens_vis, norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+    # axs[0].set_aspect('equal', adjustable='box')
+    # axs[0].set_xlabel('x [Mpc]')
+    # axs[0].set_ylabel('y [Mpc]')
+    # axs[0].set_title('comoving density field projected along z',fontsize=20)
 
+    # set up image plane coords
     # project density field to the image plane
     x = jnp.arange(ray_mesh_shape[0]) * ray_cell_size
     x -= x.mean()
@@ -544,9 +559,10 @@ def visual_lensing(ptcl, defl_2D, defl_2D_smth, conf, x,y,chi, chi_i, chi_f, ray
     ]
     print("field of view [arcmin]:", fov[0], fov[1])
     print("padded field of view [arcmin]:", fov_padded[0], fov_padded[1])
+    # quiver settings
     skip = (slice(None, None, 2), slice(None, None, 2))
 
-    # plot
+    # plot light cone density
     dens_vis = scatter(ptcl, conf)
     kernel = jnp.where((chi >= chi_i) & (chi <= chi_f), 1, 0)
     kernel *= jnp.where(chi > 0, 1, 0)
@@ -559,33 +575,10 @@ def visual_lensing(ptcl, defl_2D, defl_2D_smth, conf, x,y,chi, chi_i, chi_f, ray
             mesh2D_cell_size=ray_cell_size,
             conf=conf,
         )
-
-    axs[1].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
-    # quiver plot of defl_2D
-    skip = (slice(None, None, 2), slice(None, None, 2))
-    axs[1].quiver(
-        xx[skip],
-        yy[skip],
-        defl_2D[..., 0][skip],
-        defl_2D[..., 1][skip],
-        color="w",
-        scale=2e4,
-    )
-    axs[1].set_aspect("equal", adjustable="box")
-    axs[1].plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
-    axs[1].plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
-    axs[1].plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
-    axs[1].plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
-    # axs[1].set_xlim(-fov[0] / 2, fov[0] / 2)
-    # axs[1].set_ylim(-fov[1] / 2, fov[1] / 2)
-    axs[1].set_xlabel('x [arcmin]')
-    axs[1].set_ylabel('y [arcmin]')
-    axs[1].set_title('deflection field & density angular proj',fontsize=20)
-
-    # plot the smoothed deflection field
-    axs[2].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
-    # quiver plot of defl_2D
-    axs[2].quiver(
+    axs[0,0].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+    axs[1,0].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+    # # quiver plot of defl_2D
+    axs[1,0].quiver(
         xx[skip],
         yy[skip],
         defl_2D_smth[..., 0][skip],
@@ -593,22 +586,33 @@ def visual_lensing(ptcl, defl_2D, defl_2D_smth, conf, x,y,chi, chi_i, chi_f, ray
         color="w",
         scale=2e4,
     )
-    axs[2].set_aspect("equal", adjustable="box")
-    axs[2].plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
-    axs[2].plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
-    axs[2].plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
-    axs[2].plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
-    # axs[1].set_xlim(-fov[0] / 2, fov[0] / 2)
-    # axs[1].set_ylim(-fov[1] / 2, fov[1] / 2)
-    axs[2].set_xlabel('x [arcmin]')
-    axs[2].set_ylabel('y [arcmin]')
-    axs[2].set_title('smoothed+deconv deflection field & density angular proj',fontsize=20)
-    plt.show()
+    
+    # plot nonsmoothed twirl field
+    axs[0,1].pcolormesh(xx, yy, defl_2D[...,0])
+    axs[1,1].pcolormesh(xx, yy, defl_2D[...,1])
 
-    f,axs = plt.subplots(1,2,figsize=(24,12))
+    axs[0,2].pcolormesh(xx, yy, defl_2D_smth[...,0])
+    axs[1,2].pcolormesh(xx, yy, defl_2D_smth[...,1])
 
-    axs[0].imshow(defl_2D[...,0])
-    axs[1].imshow(defl_2D_x)
+    axs[0,1].set_title('twirl x',fontsize=20)
+    axs[1,1].set_title('twirl y',fontsize=20)
+    axs[0,2].set_title('smooth & deconv twirl x',fontsize=20)
+    axs[1,2].set_title('smooth & deconv twirl y',fontsize=20)
+
+
+
+    for ax in axs.flatten():
+        ax.set_aspect('equal', adjustable='box')
+        ax.plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
+        ax.plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
+        ax.plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+        ax.plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+        # ax.set_xlim(-fov[0] / 2, fov[0] / 2)
+        # ax.set_ylim(-fov[1] / 2, fov[1] / 2)
+        ax.set_xlabel('x [arcmin]')
+        ax.set_ylabel('y [arcmin]')
+
+
     plt.show()
 
 

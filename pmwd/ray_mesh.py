@@ -23,9 +23,9 @@ def compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, eps=0.5, p_x=0, p_y=
     N_2D_y (int): the number of mesh points along y
     """
     if p_x == 0:
-        p_x = 20
+        p_x = 5
     if p_y == 0:
-        p_y = 20
+        p_y = 5
 
     # harmonic mean of the lens plane's comoving radial distance
     # r_mean = 2.0 / (1.0 / r_l + 1.0 / r_u)
@@ -52,33 +52,33 @@ def compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, eps=0.5, p_x=0, p_y=
     N_2D_y = 2**log2_N_2D_y
     return nu_2D, N_2D_x, N_2D_y
 
-def compute_ray_mesh_max(mu_2D, M_2D_x, M_2D_y, eps=0.5, p_x=0, p_y=0):
-    """
-    compute_ray_mesh in lim r -> infinity <=> lambda_lim = mu_2D
-    """
-    if p_x == 0:
-        p_x = 20
-    if p_y == 0:
-        p_y = 20
+# def compute_ray_mesh_max(mu_2D, M_2D_x, M_2D_y, eps=0.5, p_x=0, p_y=0):
+#     """
+#     compute_ray_mesh in lim r -> infinity <=> lambda_lim = mu_2D
+#     """
+#     if p_x == 0:
+#         p_x = 20
+#     if p_y == 0:
+#         p_y = 20
 
-    # ray mesh spacing
-    nu_2D = eps * mu_2D
+#     # ray mesh spacing
+#     nu_2D = eps * mu_2D
 
-    # the lower bound of the number of mesh points along x
-    N_2D_x_lb = 1 / eps * (M_2D_x + p_x)
-    log2_N_2D_x = jnp.ceil(jnp.log2(N_2D_x_lb))
-    log2_N_2D_x = jnp.asarray(log2_N_2D_x, dtype=jnp.int32)
-    # the number of mesh points along x
-    N_2D_x = 2**log2_N_2D_x
+#     # the lower bound of the number of mesh points along x
+#     N_2D_x_lb = 1 / eps * (M_2D_x + p_x)
+#     log2_N_2D_x = jnp.ceil(jnp.log2(N_2D_x_lb))
+#     log2_N_2D_x = jnp.asarray(log2_N_2D_x, dtype=jnp.int32)
+#     # the number of mesh points along x
+#     N_2D_x = 2**log2_N_2D_x
 
-    # the lower bound of the number of mesh points along y
-    N_2D_y_lb = 1 / eps * (M_2D_y + p_y)
-    log2_N_2D_y = jnp.ceil(jnp.log2(N_2D_y_lb))
-    log2_N_2D_y = jnp.asarray(log2_N_2D_y, dtype=jnp.int32)
-    # the number of mesh points along y
-    N_2D_y = 2**log2_N_2D_y
+#     # the lower bound of the number of mesh points along y
+#     N_2D_y_lb = 1 / eps * (M_2D_y + p_y)
+#     log2_N_2D_y = jnp.ceil(jnp.log2(N_2D_y_lb))
+#     log2_N_2D_y = jnp.asarray(log2_N_2D_y, dtype=jnp.int32)
+#     # the number of mesh points along y
+#     N_2D_y = 2**log2_N_2D_y
 
-    return nu_2D, N_2D_x, N_2D_y
+#     return nu_2D, N_2D_x, N_2D_y
 
 def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, eps=0.5, p_x=0, p_y=0):
     nu_2D, N_2D_x, N_2D_y = compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, eps, p_x, p_y)
