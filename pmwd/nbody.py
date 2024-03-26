@@ -4,9 +4,9 @@ from jax import value_and_grad, jit, vjp, custom_vjp
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 
-from pmwd.boltzmann import growth, distance_cm, distance_ad
+from pmwd.boltzmann import growth
 from pmwd.cosmology import E2, H_deriv
-from pmwd.gravity import gravity, lensing
+from pmwd.gravity import gravity
 
 
 def _G_D(a, cosmo, conf):
@@ -122,18 +122,22 @@ def integrate(a_prev, a_next, ptcl, cosmo, conf):
     """Symplectic integration for one step."""
     D = K = 0
     a_disp = a_vel = a_acc = a_prev
+    print('nbody integration step')
     for d, k in conf.symp_splits:
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
+            print('drift')
             ptcl = drift(a_vel, a_disp, a_disp_next, ptcl, cosmo, conf)
             a_disp = a_disp_next
+            print('force')
             ptcl = force(a_disp, ptcl, cosmo, conf)
             a_acc = a_disp
 
         if k != 0:
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
+            print('kick')
             ptcl = kick(a_acc, a_vel, a_vel_next, ptcl, cosmo, conf)
             a_vel = a_vel_next
 
@@ -158,7 +162,7 @@ def integrate_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, 
             a_disp = a_disp_next
             ptcl, ptcl_cot, cosmo_cot_force = force_adj(a_disp, ptcl, ptcl_cot, cosmo, conf)
             a_acc = a_disp
-
+    print()
     return ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force
 
 
@@ -187,7 +191,6 @@ def observe(a_prev, a_next, ptcl, obsvbl, cosmo, conf):
 
 
 def observe_init(a, ptcl, obsvbl, cosmo, conf):
-
     pass
 
 
@@ -217,7 +220,6 @@ def nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf):
 def nbody(ptcl, obsvbl, cosmo, conf, reverse=False):
     """N-body time integration."""
     a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
-
     ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
     for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
         ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
@@ -275,78 +277,3 @@ def nbody_bwd(reverse, res, cotangents):
     return ptcl_cot, obsvbl_cot, cosmo_cot, None
 
 nbody.defvjp(nbody_fwd, nbody_bwd)
-
-# -------------------------------------------------------------------------- #
-# Ray-tracing
-# -------------------------------------------------------------------------- #
-from pmwd.rays import Rays
-
-# ray tracing nbody integration goes backward by default
-# @custom_vjp
-def nbody_ray(ptcl, ray, obsvbl, cosmo, conf):
-    """N-body time integration with ray tracinf updates."""
-    a_nbody = conf.a_nbody_ray #in reverse order up the maximum source redshift
-
-    # initialize ray, give initial velocity and zero acceleration (acc may need to change)
-    # ray = Rays.gen_grid(conf)
-
-    # initialize the acceleration to ptcl does not do anything else.
-    ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
-    # initialize rays
-    # TODO: align with conf.symp_splits.
-    # this is hard coded for conf.symp_splits = ((0, 0.5), (1, 0.5))
-    a_i = a_nbody[0]
-    a_f = a_nbody[0] * (1 - 0.5) + a_nbody[1] * 0.5
-    ray = force_ray(a_i, a_f, ptcl, ray, cosmo, conf)
-
-    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
-        ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
-
-        ray = integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf)
-    return ptcl, ray, obsvbl 
-
-def force_ray(a_i, a_f, ptcl, ray, cosmo, conf):
-    """twirl on rays."""
-    twirl = lensing(a_i, a_f, ptcl, ray, cosmo, conf)
-    return ray.replace(twirl=twirl)
-
-def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf):
-    """Symplectic integration for one step."""
-    # symplecticity requires performing the full update of ptcl then ray
-    # ray update, for now we will recompute the potential gradient will later change the api to save and read already computed potential gradient
-    D = K = 0
-    a_disp = a_vel = a_acc = a_prev
-    for d, k in conf.symp_splits:
-        if d != 0:
-            D += d
-            a_disp_next = a_prev * (1 - D) + a_next * D
-            ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf)
-            a_disp = a_disp_next
-            ray= force_ray(a_vel, a_disp, ptcl, ray, cosmo, conf)
-            a_acc = a_disp
-
-        if k != 0:
-            K += k
-            a_vel_next = a_prev * (1 - K) + a_next * K
-            ray = kick_ray(ray)
-            a_vel = a_vel_next
-    return ray
-
-
-def kick_ray(ray):
-    """Kick."""
-    am = ray.am + ray.twirl
-    return ray.replace(am=am)
-
-
-def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf):
-    """Drift."""
-
-    # factor = (chi_{n+1}-\chi_n)/r(\chi_{n+1/2})^2/c
-    factor = distance_cm(a_next, cosmo, conf) - distance_cm(a_prev, cosmo, conf)
-    factor /= distance_ad(a_vel, cosmo, conf) ** 2
-    factor /= conf.c
-    disp = ray.disp + ray.am * factor
-    print("max drift [arcmin]", jnp.max(jnp.abs(ray.am * factor) * 3437.75))
-
-    return ray.replace(disp=disp)

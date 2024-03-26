@@ -1,23 +1,25 @@
 import jax.numpy as jnp
-from jax import custom_vjp
+from jax import custom_vjp,linearize,jvp,vjp
 from jax.lax import dynamic_slice_in_dim
 from pmwd.scatter import scatter,_scatter_rt
 from pmwd.gather import gather, _gather_rt
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
 from pmwd.boltzmann import distance_cm, distance_ad, growth
-from pmwd.cosmology import E2
 from pmwd.ray_mesh import compute_ray_mesh,ray_mesh_diagnostic
+
+from functools import partial
 
 import matplotlib.pyplot as plt
 import matplotlib
 from vermeer import snapshot #.pm.snapshot import
+
 
 @custom_vjp
 def laplace(kvec, src, cosmo=None):
     """Laplace kernel in Fourier space."""
     k2 = sum(k**2 for k in kvec)
 
-    pot = jnp.where(k2 != 0, - src / k2, 0)
+    pot = jnp.where(k2 != 0, -src / k2, 0)
 
     return pot
 
@@ -25,6 +27,7 @@ def laplace(kvec, src, cosmo=None):
 def laplace_fwd(kvec, src, cosmo):
     pot = laplace(kvec, src, cosmo)
     return pot, (kvec, cosmo)
+
 
 def laplace_bwd(res, pot_cot):
     """Custom vjp to avoid NaN when using where, as well as to save memory.
@@ -36,6 +39,7 @@ def laplace_bwd(res, pot_cot):
     kvec, cosmo = res
     src_cot = laplace(kvec, pot_cot, cosmo)
     return None, src_cot, None
+
 
 laplace.defvjp(laplace_fwd, laplace_bwd)
 
@@ -127,16 +131,7 @@ def project(
             mesh2D_cell_size * mesh2D_mesh_shape[1],
         ]
     )
-    print('ray_mesh_center [arcmin]', ray_mesh_center*180/jnp.pi*60)
-
-    # grad_2d = _scatter_rt(
-    #     pmid=jnp.zeros_like(coords).astype(conf.pmid_dtype), # (lens_mesh_size, 2)
-    #     disp=coords, # (lens_mesh_size, 2)
-    #     conf=conf,
-    #     mesh=jnp.zeros(conf.ray_mesh_shape + grad_mesh.shape[1:], dtype=conf.float_dtype), # scatter to ray_mesh_shape
-    #     val = grad_mesh, # (lens_mesh_size, 2)
-    #     offset=offset,
-    #     cell_size=conf.ray_cell_size)
+    # print('ray_mesh_center [arcmin]', ray_mesh_center*180/jnp.pi*60)
 
     val_mesh2D = _scatter_rt(
         # this is place holder; positions of the 3D mesh points are given by 'disp';
@@ -200,7 +195,7 @@ def smoothing_gaussian(kvec, width, field):
     return field
 
 
-def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
+def deflection_field(a_i, a_f, ptcl, cosmo, conf):
     """
     swirl of light rays on the 2d image plane
     a_i: scale factor where the ray tracing begins
@@ -221,12 +216,12 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     D_c = growth(a_c, cosmo, conf, order=1, deriv=0)
 
     print('------------------')
-    print('compute lensing maps')
-    print('------------------')
+    # print('compute lensing maps')
+    # print('------------------')
     print(f"{'a_i':>15} = {a_i}, {'a_f':>15} = {a_f}")
     print(f"{'chi_i':>15} = {chi_i}, {'chi_f':>15} = {chi_f}")
     # print number of particle mesh planes
-    print(f"{'# planes covered':>15} = {(chi_f-chi_i)/conf.cell_size}")
+    # print(f"{'# planes covered':>15} = {(chi_f-chi_i)/conf.cell_size}")
     # particle mesh ------------------
     # Compute the corresponding mesh coordinate for the 3D particle mesh
     # this is how the mesh is set up
@@ -261,23 +256,24 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
         p_x=conf.ray_mesh_p_x,
         p_y=conf.ray_mesh_p_y,
     )
-    print('compute ray mesh')
-    ray_mesh_diagnostic(
-        mu_2D=conf.ray_spacing,
-        M_2D_x=conf.ray_grid_shape[0],
-        M_2D_y=conf.ray_grid_shape[1],
-        r_l=r_i,
-        r_u=r_f,
-        l_3D=conf.cell_size,
-        iota=conf.ray_mesh_eps,
-        p_x=conf.ray_mesh_p_x,
-        p_y=conf.ray_mesh_p_y,
-    )
     ray_cell_size = nu_2D
     ray_mesh_shape = (N_2D_x, N_2D_y)
-    print('ray_mesh_shape', (N_2D_x, N_2D_y))
-    print('ray_cell_size [arcmin]', ray_cell_size*180*60/jnp.pi)
-    print('------------------')
+
+    # print('compute ray mesh')
+    # ray_mesh_diagnostic(
+    #     mu_2D=conf.ray_spacing,
+    #     M_2D_x=conf.ray_grid_shape[0],
+    #     M_2D_y=conf.ray_grid_shape[1],
+    #     r_l=r_i,
+    #     r_u=r_f,
+    #     l_3D=conf.cell_size,
+    #     iota=conf.ray_mesh_eps,
+    #     p_x=conf.ray_mesh_p_x,
+    #     p_y=conf.ray_mesh_p_y,
+    # )
+    # print('ray_mesh_shape', (N_2D_x, N_2D_y))
+    # print('ray_cell_size [arcmin]', ray_cell_size*180*60/jnp.pi)
+    # print('------------------')
 
     # Fourier space ------------------
     # length 3 tuple, ith has shape (mesh_shape[i], 1, 1)
@@ -348,7 +344,23 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
     defl_2D_x = fftinv(defl_2D_fft_x, shape=ray_mesh_shape)
     defl_2D_y = fftinv(defl_2D_fft_y, shape=ray_mesh_shape)
     defl_2D_smth = jnp.stack([defl_2D_x, defl_2D_y], axis=-1)
-    print(defl_2D_smth.shape)
+    return defl_2D_smth, ray_cell_size
+
+def gather_twirl(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):
+    """Compute the kick operator on the ray poasitions.
+
+    Args:
+        ray_pos_ip (_type_): shape (ray_num * 2,), flattened position array
+        defl_2D_smth (_type_): shape (ray_mesh_shape[0], ray_mesh_shape[1], 2), smoothed deflection field
+        ray_pmid (_type_): shape (ray_num, 2), ray.pmid
+        ray_cell_size (_type_): _description_
+        conf (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    ray_pos_ip = ray_pos_ip.reshape(-1, 2)
+    ray_mesh_shape = defl_2D_smth.shape[0:2]
     
     ray_mesh_center = -0.5 * jnp.array(
         [
@@ -356,9 +368,10 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
             ray_cell_size * ray_mesh_shape[1],
         ]
     )
+
     twirl = _gather_rt(
-        pmid = jnp.zeros_like(ray.pmid).astype(conf.pmid_dtype), 
-        disp = ray.pos_ip(), 
+        pmid = jnp.zeros_like(ray_pmid).astype(conf.pmid_dtype), 
+        disp = ray_pos_ip, 
         conf = conf, 
         mesh = defl_2D_smth, 
         # val is 2D: twirl in x and y
@@ -367,11 +380,91 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
         ray_cell_size = ray_cell_size,
         ray_mesh_shape = ray_mesh_shape
         )
-    print('shape of twirl after gather', twirl.shape)
-        
-    visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
+    # visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
+    
+    # print('twirl', twirl.shape) # (ray_num, 2)
+    return twirl.reshape(-1)
 
-    return twirl
+
+def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
+    # Reshaping here follows this pattern below
+    # A = jnp.arange(12).reshape(3,2,2)
+    # print(A.shape)
+    # print(A)
+    # Ax = A[:,:,0]
+    # Ay = A[:,:,1]
+    # print()
+    # print('Ax \n', Ax)
+    # print('Ay \n', Ay)
+    # Ax = Ax.reshape(-1)
+    # Ay = Ay.reshape(-1)
+    # print()
+    # print('Ax \n', Ax)
+    # print('Ay \n', Ay)
+    # Ax = Ax.reshape(-1,2)
+    # Ay = Ay.reshape(-1,2)
+    # print()
+    # print('Ax \n', Ax)
+    # print('Ay \n', Ay)
+    # A_new = jnp.stack((Ax,Ay), axis=-1)
+    # print(jnp.allclose(A, A_new))
+
+    (
+        defl_2D_smth,
+        ray_cell_size,
+    ) = deflection_field(a_i, a_f, ptcl, cosmo, conf)
+    print('ray pos shape', ray.pos_ip().shape)
+    # useful notes on linearize https://github.com/google/jax/issues/526
+    f = partial(
+        gather_twirl,
+        ray_pmid=ray.pmid,
+        defl_2D_smth=defl_2D_smth,
+        ray_cell_size=ray_cell_size,
+        conf=conf,
+    )
+    
+    # first/second column of the distortion matrix (dtheta_n1_dtheta_0_x/y), 
+    # flattened, shape = (ray_num * 2)
+    A0_x = ray.A[:,:,0].reshape(-1) 
+    A0_y = ray.A[:,:,1].reshape(-1)
+    
+    # ray positions, flattened, shape = (ray_num * 2)
+    primals = ray.pos_ip().reshape(-1)
+    
+    # gradient, reshape results to (ray_num, 2)
+    twirl, f_jvp = linearize(f, primals)
+    twirl = twirl.reshape(-1,2)
+    dB_x = f_jvp(A0_x).reshape(-1,2)
+    dB_y = f_jvp(A0_y).reshape(-1,2)
+
+    # stack two columns vector side by side
+    dB = jnp.stack([dB_x, dB_y], axis=-1)
+    return twirl, dB
+
+# scratch
+# def gather_twirl(defl_2D_smth, ray, ray_mesh_shape, ray_cell_size, conf):
+#     ray_mesh_center = -0.5 * jnp.array(
+#         [
+#             ray_cell_size * ray_mesh_shape[0],
+#             ray_cell_size * ray_mesh_shape[1],
+#         ]
+#     )
+
+#     twirl = _gather_rt(
+#         pmid = jnp.zeros_like(ray.pmid).astype(conf.pmid_dtype),
+#         disp = ray.pos_ip(),
+#         conf = conf,
+#         mesh = defl_2D_smth,
+#         # val is 2D: twirl in x and y
+#         val = jnp.zeros((conf.ray_num,2)),
+#         offset = ray_mesh_center,
+#         ray_cell_size = ray_cell_size,
+#         ray_mesh_shape = ray_mesh_shape
+#         )
+#     # print('shape of twirl after gather', twirl.shape) # (ray_num, 2)
+#     # visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
+#     return twirl
+
 
 # visualisation ------------------
 # ------------------------------

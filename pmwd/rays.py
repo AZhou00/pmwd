@@ -62,7 +62,9 @@ class Rays:
     disp: ArrayLike  # image plane displacement, not 3D displacement
     am: Optional[ArrayLike] = None # image plane angular momentum
     twirl: Optional[ArrayLike] = None # image plane twirl (angular impulse or Delta am)
-
+    A: Optional[ArrayLike] = None # the distortion matrix d theta_n / d theta_0
+    B: Optional[ArrayLike] = None # d theta_eta / d theta_0
+    dB: Optional[ArrayLike] = None
     attr: Any = None
 
     def __post_init__(self):
@@ -90,9 +92,17 @@ class Rays:
         return tree_map(itemgetter(key), self)
 
     @classmethod
-    def gen_grid(cls, conf, am=False, twirl=False):
-        """Generate rays on the a=1 (z=0) observer plane on pixel grid.
-
+    def gen_grid(cls, conf, am=False, twirl=False, A=False, B=False, dB=False):
+        """
+        Generate rays at z=0 on the pixelized grid. The velocity aligns with the positive positive time. 
+        Only two components of the angular momentum are initialized, the third component is constrained by the mass-shell condition.
+        i.e., am_z = 1 + \order(v^2)
+        
+        The variables and their /d_theta0 pairs are
+        disp <-> A
+        am <-> B
+        twirl <-> dB
+        
         Parameters
         ----------
         conf : Configuration
@@ -100,6 +110,12 @@ class Rays:
             Whether to initialize angular momenta to zeros.
         twirl : bool, optional
             Whether to initialize twirls to zeros.
+        A : bool, optional
+            Whether to initialize distortion matrices (d theta / d theta_0) to the 2x2 identity matrix for each ray.
+        B : bool, optional
+            Whether to initialize distortion matrices (d eta_0 / d theta_0) to the 2x2 zero matrix for each ray.
+        dB : bool, optional
+            Whether to initialize distortion matrix gradients to zeros.
         """
         # print("fnc: Rays.gen_grid")
         pmid, disp = [], []
@@ -122,13 +138,15 @@ class Rays:
         disp = jnp.meshgrid(*disp, indexing="ij")
         disp = jnp.stack(disp, axis=-1).reshape(-1, 2) # image plane is 2d
         
-        # angular momentum: the direction is by default point towards the observer (opposite of the tracing direction).
-        # third entry is constrained by the mass-shell condition, = 1 + \order(v^2)
-        am = jnp.zeros_like(disp) if not am else None
-        twirl = jnp.zeros_like(disp) if not twirl else None
-        return cls(conf, pmid, disp, am=am, twirl=twirl)
+        am = jnp.zeros_like(disp, dtype=conf.float_dtype) if not am else None
+        twirl = jnp.zeros_like(disp, dtype=conf.float_dtype) if not twirl else None 
+        A = jnp.eye(2, dtype=conf.float_dtype).reshape(1, 2, 2).repeat(len(pmid), axis=0) if not A else None
+        B = jnp.zeros((len(pmid), 2, 2), dtype=conf.float_dtype) if not B else None
+        dB = jnp.zeros_like(B, dtype=conf.float_dtype)
+        # print(A.shape) # (ray_num, 2, 2)
+        return cls(conf, pmid, disp, am=am, twirl=twirl, A=A, B=B, dB=dB)
 
-    def pos_ip(self, dtype=jnp.float64): 
+    def pos_ip(self, dtype=jnp.float32): 
         #TODO: ask why jnp.64, ok probably becasue we are merging pmid and disp
         #TODO: maybe 32 for ray tracing is good enough. is this a major issue?
         """Ray positions on the 2d image plane angular 
@@ -157,7 +175,7 @@ class Rays:
 
         return pos
 
-    def pos_3d(self, a, cosmo, conf, dtype=jnp.float64, wrap=True):
+    def pos_3d(self, a, cosmo, conf, dtype=jnp.float32, wrap=True):
         """Ray 3d comoving positions, at the a=a slice.
 
         Parameters
