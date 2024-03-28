@@ -1,6 +1,7 @@
 import jax.numpy as jnp
-import jax 
+import jax
 from functools import reduce
+
 
 def fftlen(n, platform=None):
     """Find the next fast length for FFT on the platform.
@@ -22,14 +23,14 @@ def fftlen(n, platform=None):
     """
     platform = jax.lib.xla_bridge.get_backend(platform=platform).platform
 
-    if platform == 'cpu':
+    if platform == "cpu":
         radices = [2, 3, 5]
-    elif platform == 'rocm':
+    elif platform == "rocm":
         radices = [2, 3, 5, 7, 11, 13, 17]
-    elif platform in ['cuda', 'gpu']:
-        radices = [2, 3] #[2, 3, 5, 7]
+    elif platform in ["cuda", "gpu"]:
+        radices = [2, 3]  # [2, 3, 5, 7]
     else:
-        raise NotImplementedError(f'Platform {platform} is not supported.')
+        raise NotImplementedError(f"Platform {platform} is not supported.")
 
     return fftlen_(n, radices)
 
@@ -48,13 +49,17 @@ def fftlen_(n, radices):
     if n <= max(radices):
         return n
 
-    #FIXME if need ensure_compile_time_eval
+    # FIXME if need ensure_compile_time_eval
     # log_radix_2n = jnp.log(2*n)/jnp.log(radix) # log(2*n, radix)
-    powers = [radix ** (jnp.arange(1 + jnp.floor(jnp.log(2*n)/jnp.log(radix)))) for radix in radices]
+    powers = [
+        radix ** (jnp.arange(1 + jnp.floor(jnp.log(2 * n) / jnp.log(radix))))
+        for radix in radices
+    ]
     products = reduce(jnp.kron, powers)
     return products[products >= n].min().item()
 
-def compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=1, p_x=0, p_y=0):
+
+def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1):
     """
     Compute the size and shape of the ray mesh for a given lens plane and source plane.
 
@@ -65,41 +70,31 @@ def compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=1, p_x=0, p_y=0
     r_l (float): lower bound of the lens plane's radial comoving distance, [Mpc]
     r_u (float): upper bound of the lens plane's radial comoving distance, [Mpc]
     l_3D (float): 3D $\grad \npot$ mesh cell size in comoving space, [Mpc]
-    iota (float): The precision parameter; $\epsilon \in (0.0,1]$, the lower the better; typically 1/2.
     p_x (int): min number of mesh point padding on side x
     p_y (int): min number of mesh point padding on side y
         padding defined by
         $$ N_{2D} \nu_{2D} \leq M_{2D} \mu_{2D} + p_{min} \lambda_{lim} $$
+    iota (float): The precision parameter; $\epsilon \in (0.0,1]$, the lower the better; typically 1/2.
+
     Returns:
     nu_2D (float): ray mesh spacing
     N_2D_x (int): the number of mesh points along x
     N_2D_y (int): the number of mesh points along y
     """
-    if p_x == 0:
-        p_x = 5
-    if p_y == 0:
-        p_y = 5
-        
+
     r_mean = (r_l + r_u) / 2.0
     lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
-    
+
     nu_2D = iota * lambda_lim
-    Nx = M_2D_x*mu_2D/nu_2D+p_x/iota
+    Nx = M_2D_x * mu_2D / nu_2D + p_x / iota
     Nx = jnp.array(fftlen(Nx, platform=None))
     Nx = Nx.astype(jnp.int32)
-    Ny = M_2D_y*mu_2D/nu_2D+p_y/iota
+    Ny = M_2D_y * mu_2D / nu_2D + p_y / iota
     Ny = jnp.array(fftlen(Ny, platform=None))
     Ny = Ny.astype(jnp.int32)
-    return nu_2D, Nx, Ny
 
-def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, p_y=0):
-    nu_2D, N_2D_x, N_2D_y = compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota, p_x, p_y)
-
-    # print aligned table
-    # r_mean = 2.0 / (1.0 / r_l + 1.0 / r_u)
-    r_mean = (r_l + r_u) / 2.0
-    
-    print('------------------')
+    # diagnostics
+    print("------------------")
     # particle mesh reso: l_3D / r_mean
     print(f"{'ptcl mesh res':>15} = {l_3D/r_mean*180*60/jnp.pi:.2e} [arcmin]")
     # ray mesh reso: mu_2D
@@ -107,13 +102,64 @@ def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, 
     # limiting resolution
     lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
     print(f"{'res lim':>15} = {lambda_lim*180*60/jnp.pi:.2e} [arcmin]")
-
     # printy mesh grid
-    print(f"{'nu_2D':>15} = {nu_2D*180*60/jnp.pi:.2e} [arcmin]")
+    print(f"{'ray_cell_size':>15} = {nu_2D*180*60/jnp.pi:.2e} [arcmin]")
     # print log2 mesh grid
-    print(f"{'log2_N_2D_x':>15} = {jnp.log2(N_2D_x)}, {'log2_N_2D_y':>15} = {jnp.log2(N_2D_y)}")
-    print(f"{'N_2D_x':>15} = {N_2D_x}, {'N_2D_y':>15} = {N_2D_y}")
-    return
+    print(f"{'log2_N_2D_x':>15} = {jnp.log2(Nx)}, {'log2_N_2D_y':>15} = {jnp.log2(Ny)}")
+    print("ray_mesh_shape", (Nx, Ny))
+
+    return nu_2D, (Nx, Ny)
+
+
+def compute_ray_mesh(r_l, r_u, conf):
+    mu_2D = conf.ray_spacing
+    M_2D_x = conf.ray_grid_shape[0]
+    M_2D_y = conf.ray_grid_shape[1]
+    l_3D = conf.cell_size
+    iota = conf.ray_mesh_eps
+
+    # minimum padding on each side
+    p_x = conf.ray_mesh_p_x
+    p_y = conf.ray_mesh_p_y
+    if p_x == 0:
+        p_x = 5
+    if p_y == 0:
+        p_y = 5
+
+    return _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota)
+
+
+def ray_mesh_center(ray_cell_size, ray_mesh_shape):
+    center = -0.5 * jnp.array(
+        [
+            ray_cell_size * ray_mesh_shape[0],
+            ray_cell_size * ray_mesh_shape[1],
+        ]
+    )
+    return center
+
+
+# def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, p_y=0):
+#     nu_2D, N_2D_x, N_2D_y  = compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota, p_x, p_y)
+#     # print aligned table
+#     # r_mean = 2.0 / (1.0 / r_l + 1.0 / r_u)
+#     r_mean = (r_l + r_u) / 2.0
+
+#     print('------------------')
+#     # particle mesh reso: l_3D / r_mean
+#     print(f"{'ptcl mesh res':>15} = {l_3D/r_mean*180*60/jnp.pi:.2e} [arcmin]")
+#     # ray mesh reso: mu_2D
+#     print(f"{'mu_2D':>15} = {mu_2D*180*60/jnp.pi:.2e} [arcmin]")
+#     # limiting resolution
+#     lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
+#     print(f"{'res lim':>15} = {lambda_lim*180*60/jnp.pi:.2e} [arcmin]")
+
+#     # printy mesh grid
+#     print(f"{'nu_2D':>15} = {nu_2D*180*60/jnp.pi:.2e} [arcmin]")
+#     # print log2 mesh grid
+#     print(f"{'log2_N_2D_x':>15} = {jnp.log2(N_2D_x)}, {'log2_N_2D_y':>15} = {jnp.log2(N_2D_y)}")
+#     print(f"{'N_2D_x':>15} = {N_2D_x}, {'N_2D_y':>15} = {N_2D_y}")
+#     return
 
 
 # def compute_ray_mesh_old(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, eps=1, p_x=0, p_y=0):
@@ -141,7 +187,7 @@ def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, 
 #         p_x = 5
 #     if p_y == 0:
 #         p_y = 5
-    
+
 #     # harmonic mean of the lens plane's comoving radial distance
 #     # r_mean = 2.0 / (1.0 / r_l + 1.0 / r_u)
 #     r_mean = (r_l + r_u) / 2.0
@@ -165,7 +211,7 @@ def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, 
 #     log2_N_2D_y = log2_N_2D_y.astype(jnp.int32)
 #     # the number of mesh points along y
 #     N_2D_y = 2**log2_N_2D_y
-    
+
 #     # # the lower bound of the number of mesh points along x
 #     # N_2D_x_lb = M_2D_x*jnp.min(jnp.array([mu_2D*r_mean/l_3D, 1])) + p_x
 #     # N_2D_x_lb /= eps
@@ -182,7 +228,7 @@ def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, 
 #     # # the number of mesh points along y
 #     # N_2D_y = 2**log2_N_2D_y
 #     # nu_2D = M_2D_y/N_2D_y*mu_2D+p_y*lambda_lim/N_2D_y
-    
+
 #     return nu_2D, N_2D_x, N_2D_y
 
 # def compute_ray_mesh_max(mu_2D, M_2D_x, M_2D_y, eps=0.5, p_x=0, p_y=0):
