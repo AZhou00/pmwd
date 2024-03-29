@@ -122,22 +122,19 @@ def integrate(a_prev, a_next, ptcl, cosmo, conf):
     """Symplectic integration for one step."""
     D = K = 0
     a_disp = a_vel = a_acc = a_prev
-    print('nbody integration step')
+    # print('nbody integration step')
     for d, k in conf.symp_splits:
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
-            print('drift')
             ptcl = drift(a_vel, a_disp, a_disp_next, ptcl, cosmo, conf)
             a_disp = a_disp_next
-            print('force')
             ptcl = force(a_disp, ptcl, cosmo, conf)
             a_acc = a_disp
 
         if k != 0:
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
-            print('kick')
             ptcl = kick(a_acc, a_vel, a_vel_next, ptcl, cosmo, conf)
             a_vel = a_vel_next
 
@@ -162,7 +159,7 @@ def integrate_adj(a_prev, a_next, ptcl, ptcl_cot, obsvbl_cot, cosmo, cosmo_cot, 
             a_disp = a_disp_next
             ptcl, ptcl_cot, cosmo_cot_force = force_adj(a_disp, ptcl, ptcl_cot, cosmo, conf)
             a_acc = a_disp
-    print()
+    # print()
     return ptcl, ptcl_cot, cosmo_cot, cosmo_cot_force
 
 

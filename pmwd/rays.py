@@ -45,13 +45,13 @@ class Rays:
         `pos_3d` is the 3d comoving position of the rays.
     disp : ArrayLike
         Ray (image plane, angular) displacements (relative to the position specified by pmid) in [rad].
-    am: ArrayLike
+    eta: ArrayLike
         Rays' 2d angular momenta, r(\chi) v; v is the 2d comoving velocity perpendicular to each ray's main LOS.
         In this formalism, the normalized 3d momentum of a ray is given by (-v/r(\chi), -1+\order(v^2)), the signs
         are giving by the physical motion of the rays. Unit [H_0 L^2] 
-    twirl : ArrayLike 
-        Rays' 2d twirl (angular impulse) in unit of [H_0 L^2], 
-        i.e., twirl = \Delta am = \partial am / \partial \chi * \Delta \chi
+    deta : ArrayLike 
+        Rays' 2d deta (angular impulse) in unit of [H_0 L^2], 
+        i.e., deta = \Delta eta = \partial eta / \partial \chi * \Delta \chi
     attr : pytree, optional
         Particle attributes (custom features).
     """
@@ -60,8 +60,8 @@ class Rays:
 
     pmid: ArrayLike
     disp: ArrayLike  # image plane displacement, not 3D displacement
-    am: Optional[ArrayLike] = None # image plane angular momentum
-    twirl: Optional[ArrayLike] = None # image plane twirl (angular impulse or Delta am)
+    eta: Optional[ArrayLike] = None # image plane angular momentum
+    deta: Optional[ArrayLike] = None # image plane deta (angular impulse or Delta eta)
     A: Optional[ArrayLike] = None # the distortion matrix d theta_n / d theta_0
     B: Optional[ArrayLike] = None # d theta_eta / d theta_0
     dB: Optional[ArrayLike] = None
@@ -92,7 +92,7 @@ class Rays:
         return tree_map(itemgetter(key), self)
 
     @classmethod
-    def gen_grid(cls, conf, am=False, twirl=False, A=False, B=False, dB=False):
+    def gen_grid(cls, conf, eta=False, deta=False, A=False, B=False, dB=False):
         """
         Generate rays at z=0 on the pixelized grid. The velocity aligns with the positive positive time. 
         Only two components of the angular momentum are initialized, the third component is constrained by the mass-shell condition.
@@ -100,15 +100,15 @@ class Rays:
         
         The variables and their /d_theta0 pairs are
         disp <-> A
-        am <-> B
-        twirl <-> dB
+        eta <-> B
+        deta <-> dB
         
         Parameters
         ----------
         conf : Configuration
-        am : bool, optional
+        eta : bool, optional
             Whether to initialize angular momenta to zeros.
-        twirl : bool, optional
+        deta : bool, optional
             Whether to initialize twirls to zeros.
         A : bool, optional
             Whether to initialize distortion matrices (d theta / d theta_0) to the 2x2 identity matrix for each ray.
@@ -138,13 +138,13 @@ class Rays:
         disp = jnp.meshgrid(*disp, indexing="ij")
         disp = jnp.stack(disp, axis=-1).reshape(-1, 2) # image plane is 2d
         
-        am = jnp.zeros_like(disp, dtype=conf.float_dtype) if not am else None
-        twirl = jnp.zeros_like(disp, dtype=conf.float_dtype) if not twirl else None 
+        eta = jnp.zeros_like(disp, dtype=conf.float_dtype) if not eta else None
+        deta = jnp.zeros_like(disp, dtype=conf.float_dtype) if not deta else None 
         A = jnp.eye(2, dtype=conf.float_dtype).reshape(1, 2, 2).repeat(len(pmid), axis=0) if not A else None
         B = jnp.zeros((len(pmid), 2, 2), dtype=conf.float_dtype) if not B else None
         dB = jnp.zeros_like(B, dtype=conf.float_dtype)
         # print(A.shape) # (ray_num, 2, 2)
-        return cls(conf, pmid, disp, am=am, twirl=twirl, A=A, B=B, dB=dB)
+        return cls(conf, pmid, disp, eta=eta, deta=deta, A=A, B=B, dB=dB)
 
     def pos_ip(self, dtype=jnp.float32): 
         #TODO: ask why jnp.64, ok probably becasue we are merging pmid and disp

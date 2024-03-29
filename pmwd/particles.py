@@ -119,7 +119,7 @@ class Particles:
             Whether to initialize accelerations to zeros.
 
         """
-        print('fnc: Particles.gen_grid')
+        # print('fnc: Particles.gen_grid')
         # conf.ptcl_grid_shape, conf.mesh_shape = ((16, 16, 32), (32, 32, 64))
         pmid, disp = [], []
         for i, (sp, sm) in enumerate(zip(conf.ptcl_grid_shape, conf.mesh_shape)):

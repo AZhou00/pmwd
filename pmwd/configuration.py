@@ -105,7 +105,7 @@ class Configuration:
 
     ray_spacing: float
     ray_grid_shape: Tuple[int, ...]
-    ray_mesh_eps: float = 1
+    ray_mesh_iota: float = 1
     ray_mesh_p_x: int = 0
     ray_mesh_p_y: int = 0
 
@@ -155,7 +155,9 @@ class Configuration:
     chunk_size: int = 2**24
 
     # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
-    z_rtlim: float = 0.3
+    # z_rtlim: float = 0.4
+    # a_rtlim: float = 1 / (1 + z_rtlim)
+    z_rtlim: float = 0.6
     a_rtlim: float = 1 / (1 + z_rtlim)
 
     def __post_init__(self):
@@ -282,7 +284,7 @@ class Configuration:
     #         mu_2D=self.ray_spacing,
     #         M_2D_x=self.ray_grid_shape[0],
     #         M_2D_y=self.ray_grid_shape[1],
-    #         eps=self.ray_mesh_eps,
+    #         eps=self.ray_mesh_iota,
     #         p_x=self.ray_mesh_p_x,
     #         p_y=self.ray_mesh_p_y,
     #     )
@@ -291,12 +293,12 @@ class Configuration:
     # @property
     # def ray_cell_size_default(self):
     #     """The mesh cell resolution of the Maximum ray mesh"""
-    #     nu_2D = self.ray_mesh_eps * self.ray_spacing
+    #     nu_2D = self.ray_mesh_iota * self.ray_spacing
     #     # nu_2D, N_2D_x, N_2D_y = compute_ray_mesh_max(
     #     #     mu_2D=self.ray_spacing,
     #     #     M_2D_x=self.ray_grid_shape[0],
     #     #     M_2D_y=self.ray_grid_shape[1],
-    #     #     eps=self.ray_mesh_eps,
+    #     #     eps=self.ray_mesh_iota,
     #     #     p_x=self.ray_mesh_p_x,
     #     #     p_y=self.ray_mesh_p_y,
     #     # )

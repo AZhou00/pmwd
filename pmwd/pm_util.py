@@ -156,7 +156,7 @@ def enmesh(i1, d1, a1, s1, b12, a2, s2, grad):
         return i2, f2
 
 
-def fftfreq(shape, spacing, dtype=jnp.float64, sparse=True):
+def fftfreq(shape, spacing, dtype=jnp.float64, sparse=True): #float64
     """(Angular) wavevectors for FFT.
 
     Parameters

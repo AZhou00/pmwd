@@ -59,7 +59,7 @@ def fftlen_(n, radices):
     return products[products >= n].min().item()
 
 
-def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1):
+def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1, dtype=jnp.float32):
     """
     Compute the size and shape of the ray mesh for a given lens plane and source plane.
 
@@ -94,21 +94,21 @@ def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1):
     Ny = Ny.astype(jnp.int32)
 
     # diagnostics
-    print("------------------")
-    # particle mesh reso: l_3D / r_mean
-    print(f"{'ptcl mesh res':>15} = {l_3D/r_mean*180*60/jnp.pi:.2e} [arcmin]")
-    # ray mesh reso: mu_2D
-    print(f"{'mu_2D':>15} = {mu_2D*180*60/jnp.pi:.2e} [arcmin]")
-    # limiting resolution
-    lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
-    print(f"{'res lim':>15} = {lambda_lim*180*60/jnp.pi:.2e} [arcmin]")
+    # print("------------------")
+    # # particle mesh reso: l_3D / r_mean
+    # print(f"{'ptcl mesh res':>15} = {l_3D/r_mean*180*60/jnp.pi:.2e} [arcmin]")
+    # # ray mesh reso: mu_2D
+    # print(f"{'mu_2D':>15} = {mu_2D*180*60/jnp.pi:.2e} [arcmin]")
+    # # limiting resolution
+    # lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
+    # print(f"{'res lim':>15} = {lambda_lim*180*60/jnp.pi:.2e} [arcmin]")
     # printy mesh grid
     print(f"{'ray_cell_size':>15} = {nu_2D*180*60/jnp.pi:.2e} [arcmin]")
-    # print log2 mesh grid
-    print(f"{'log2_N_2D_x':>15} = {jnp.log2(Nx)}, {'log2_N_2D_y':>15} = {jnp.log2(Ny)}")
+    # # print log2 mesh grid
+    # print(f"{'log2_N_2D_x':>15} = {jnp.log2(Nx)}, {'log2_N_2D_y':>15} = {jnp.log2(Ny)}")
     print("ray_mesh_shape", (Nx, Ny))
 
-    return nu_2D, (Nx, Ny)
+    return nu_2D.astype(dtype), (Nx, Ny)
 
 
 def compute_ray_mesh(r_l, r_u, conf):
@@ -116,7 +116,7 @@ def compute_ray_mesh(r_l, r_u, conf):
     M_2D_x = conf.ray_grid_shape[0]
     M_2D_y = conf.ray_grid_shape[1]
     l_3D = conf.cell_size
-    iota = conf.ray_mesh_eps
+    iota = conf.ray_mesh_iota
 
     # minimum padding on each side
     p_x = conf.ray_mesh_p_x
@@ -126,16 +126,16 @@ def compute_ray_mesh(r_l, r_u, conf):
     if p_y == 0:
         p_y = 5
 
-    return _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota)
+    return _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota, dtype=conf.float_dtype)
 
 
-def ray_mesh_center(ray_cell_size, ray_mesh_shape):
+def ray_mesh_center(ray_cell_size, ray_mesh_shape, dtype=jnp.float32):
     center = -0.5 * jnp.array(
         [
             ray_cell_size * ray_mesh_shape[0],
             ray_cell_size * ray_mesh_shape[1],
         ]
-    )
+    ).astype(dtype)
     return center
 
 
