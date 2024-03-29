@@ -158,6 +158,17 @@ class Configuration:
     z_rtlim: float = 0.3
     a_rtlim: float = 1 / (1 + z_rtlim)
 
+    # SO related
+    # type of SO method
+    # None: no SO applied
+    # 'SR': Symbolic Regression expression
+    # 'NN': Neural Net: f(k_i) * g(k_1, k_2, k_3)
+    so_type: Optional[str] = None
+    # list of the number of nodes (no input layer) of so nn
+    so_nodes: Optional[list] = None
+    soft_i: Optional[str] = None
+    softening_length: Optional[float] = None
+
     def __post_init__(self):
         if self._is_transforming():
             return
@@ -422,10 +433,10 @@ class Configuration:
 
     @property
     def ray_origin(self):
-        """The comoving location of the origin of the observer relative 
+        """The comoving location of the origin of the observer relative
         to the particle mesh. This is used to shift the observer to the center of the x-y-(z=0) plane
         """
-        return jnp.array([self.ptcl_grid_shape[0]*self.ptcl_spacing/2, 
+        return jnp.array([self.ptcl_grid_shape[0]*self.ptcl_spacing/2,
                           self.ptcl_grid_shape[1]*self.ptcl_spacing/2])
 
     @property
@@ -439,7 +450,7 @@ class Configuration:
         """Shape of the lens plane mesh grid.
         Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane can be computed.
         The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
-        integrate the lensing potential. 
+        integrate the lensing potential.
         """
         # chi has the same ordering as conf.a_nbody
         # chi = distance_cm(self.a_nbody, cosmo, conf)

@@ -11,6 +11,8 @@ from jax.tree_util import tree_map
 from pmwd.tree_util import pytree_dataclass
 from pmwd.configuration import Configuration
 
+from flax.core.frozen_dict import FrozenDict
+
 
 @partial(pytree_dataclass, aux_fields="conf", frozen=True)
 class Cosmology:
@@ -72,6 +74,9 @@ class Cosmology:
     varlin: Optional[Array] = field(default=None, compare=False)
 
     distance: Optional[Array] = field(default=None, compare=False)
+
+    # list of parameters of SO neural nets
+    so_params: Optional[list[FrozenDict]] = None
 
     def __post_init__(self):
         if self._is_transforming():

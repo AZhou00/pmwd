@@ -7,6 +7,8 @@ from pmwd.pm_util import fftfreq, fftfwd, fftinv
 from pmwd.boltzmann import distance_cm, distance_ad, growth
 from pmwd.ray_mesh import compute_ray_mesh,ray_mesh_diagnostic
 
+from pmwd.sto.so import sotheta, pot_sharp, grad_sharp
+
 from functools import partial
 
 import matplotlib.pyplot as plt
@@ -68,9 +70,17 @@ def gravity(a, ptcl, cosmo, conf):
     dens = fftfwd(dens)  # normalization canceled by that of irfftn below
     pot = laplace(kvec, dens, cosmo) # mesh shape in Fourier space
 
+    if conf.so_type is not None:  # spatial optimization
+        theta = sotheta(cosmo, conf, a)
+        pot = pot_sharp(pot, kvec, theta, cosmo, conf, a)
+
     acc = []
     for k in kvec:
         grad = neg_grad(k, pot, conf.cell_size) # has unit
+
+        if conf.so_type is not None:  # spatial optimization
+            grad = grad_sharp(grad, k, theta, cosmo, conf, a)
+
         grad = fftinv(grad, shape=conf.mesh_shape)
         grad = grad.astype(conf.float_dtype)  # no jnp.complex32
 
@@ -206,7 +216,7 @@ def deflection_field(a_i, a_f, ptcl, cosmo, conf):
 
     all calculations follow unit in L=[Mpc] and T=[1/H0]
     """
-    
+
     chi_i = distance_cm(a_i, cosmo, conf)
     chi_f = distance_cm(a_f, cosmo, conf)
     r_i = distance_ad(a_i, cosmo, conf)
@@ -285,7 +295,7 @@ def deflection_field(a_i, a_f, ptcl, cosmo, conf):
     # RHS of Poisson's equation
     dens = scatter(ptcl, conf) # mesh_shape
     dens -= 1  # overdensity
-    dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype) 
+    dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype)
     dens *= (cosmo.h)**2 # H0^2 term
     dens /= a_c # potential is evaluated at the middle of the time step
 
@@ -307,7 +317,7 @@ def deflection_field(a_i, a_f, ptcl, cosmo, conf):
 
     # compute lensing kernel on the z axis and broadcast to the x&y axes
     kernel = jnp.where((z>=chi_i) & (z<=chi_f), 2*r_chi/conf.c, 0) # shape (N_z,)
-    kernel *= jnp.where(z > 0, 1, 0) # 
+    kernel *= jnp.where(z > 0, 1, 0) #
     # TODO: add growth factor correction
     kernel *= jnp.ones_like(r_chi)*D_c/D_c
     kernel *= jnp.where(r_chi>0, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi**2, 0)
@@ -326,7 +336,7 @@ def deflection_field(a_i, a_f, ptcl, cosmo, conf):
         mesh2D_cell_size=ray_cell_size,
         conf=conf,
     )
-    
+
     defl_2D_fft_x = fftfwd(defl_2D[...,0])  # normalization canceled by that of irfftn below
     defl_2D_fft_y = fftfwd(defl_2D[...,1])  # normalization canceled by that of irfftn below
     # deconv scattering
@@ -361,7 +371,7 @@ def gather_twirl(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):
     """
     ray_pos_ip = ray_pos_ip.reshape(-1, 2)
     ray_mesh_shape = defl_2D_smth.shape[0:2]
-    
+
     ray_mesh_center = -0.5 * jnp.array(
         [
             ray_cell_size * ray_mesh_shape[0],
@@ -370,18 +380,18 @@ def gather_twirl(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):
     )
 
     twirl = _gather_rt(
-        pmid = jnp.zeros_like(ray_pmid).astype(conf.pmid_dtype), 
-        disp = ray_pos_ip, 
-        conf = conf, 
-        mesh = defl_2D_smth, 
+        pmid = jnp.zeros_like(ray_pmid).astype(conf.pmid_dtype),
+        disp = ray_pos_ip,
+        conf = conf,
+        mesh = defl_2D_smth,
         # val is 2D: twirl in x and y
-        val = jnp.zeros((conf.ray_num,2)), 
+        val = jnp.zeros((conf.ray_num,2)),
         offset = ray_mesh_center,
         ray_cell_size = ray_cell_size,
         ray_mesh_shape = ray_mesh_shape
         )
     # visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
-    
+
     # print('twirl', twirl.shape) # (ray_num, 2)
     return twirl.reshape(-1)
 
@@ -422,15 +432,15 @@ def lensing(a_i, a_f, ptcl, ray, cosmo, conf):
         ray_cell_size=ray_cell_size,
         conf=conf,
     )
-    
-    # first/second column of the distortion matrix (dtheta_n1_dtheta_0_x/y), 
+
+    # first/second column of the distortion matrix (dtheta_n1_dtheta_0_x/y),
     # flattened, shape = (ray_num * 2)
-    A0_x = ray.A[:,:,0].reshape(-1) 
+    A0_x = ray.A[:,:,0].reshape(-1)
     A0_y = ray.A[:,:,1].reshape(-1)
-    
+
     # ray positions, flattened, shape = (ray_num * 2)
     primals = ray.pos_ip().reshape(-1)
-    
+
     # gradient, reshape results to (ray_num, 2)
     twirl, f_jvp = linearize(f, primals)
     twirl = twirl.reshape(-1,2)
@@ -507,7 +517,7 @@ def visual_nbody_proj(ptcl, conf, x, y, chi, chi_i, chi_f):
 
 
 def visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, chi, chi_i, chi_f, ray_mesh_shape, ray_cell_size):
-    
+
     f,axs = plt.subplots(2,3,figsize=(36,24),sharex=True,sharey=True)
 
     # # plot the comoving space projection of the density field
@@ -573,7 +583,7 @@ def visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, chi, chi_i, chi_f
         color="w",
         scale=2e4,
     )
-    
+
     # plot nonsmoothed twirl field
     axs[0,1].pcolormesh(xx, yy, defl_2D[...,0])
     axs[1,1].pcolormesh(xx, yy, defl_2D[...,1])
@@ -713,7 +723,7 @@ def visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, chi, chi_i, chi_f
     #     axs[0].imshow(defl_2D[...,0])
     #     axs[1].imshow(defl_2D_x)
     #     plt.show()
-        
+
     # ------------------ lensing ------------------
     # # query the lens plane
     # slice_flag = False
@@ -787,11 +797,11 @@ def visual_lensing(ptcl, defl_2D, defl_2D_smth, coord3D, conf, chi, chi_i, chi_f
     # # _gather_rt is _gather without conf.chunk_size dependence
     # # (ray_num, 2)
     # defl_2D = _gather_rt(
-    #     pmid = jnp.zeros_like(ray.pmid).astype(conf.pmid_dtype), 
-    #     disp = ray.pos_ip(), 
-    #     conf = conf, 
-    #     mesh = defl_2D, 
-    #     val = jnp.zeros((conf.ray_num,2)), 
+    #     pmid = jnp.zeros_like(ray.pmid).astype(conf.pmid_dtype),
+    #     disp = ray.pos_ip(),
+    #     conf = conf,
+    #     mesh = defl_2D,
+    #     val = jnp.zeros((conf.ray_num,2)),
     #     # offset = offset,
     #     cell_size = conf.ray_cell_size)
     # print('shape of grad_2d after gather', grad_2d.shape)
