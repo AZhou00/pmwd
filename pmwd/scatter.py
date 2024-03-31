@@ -34,7 +34,7 @@ def _scatter(pmid, disp, conf, mesh, val, offset, cell_size):
     ptcl_num, spatial_ndim = pmid.shape
 
     if val is None:
-        val = conf.mesh_size / conf.ptcl_num
+        val = conf.mesh_size / conf.ptcl_num / 100
     val = jnp.asarray(val, dtype=conf.float_dtype)
 
     if mesh is None:
@@ -90,9 +90,9 @@ def _scatter_rt(pmid, disp, conf, mesh, val, offset, ray_cell_size, ray_mesh_sha
     # remove dependence on conf.chunk_size
     ptcl_num, spatial_ndim = pmid.shape # (lens_mesh_size, 2)
 
-    if val is None:
-        val = ray_mesh_size / ray_num
-    val = jnp.asarray(val, dtype=conf.float_dtype)
+    # if val is None:
+    #     val = ray_mesh_size / ray_num
+    val = jnp.asarray(val, dtype=conf.float_dtype) 
 
     if mesh is None:
         mesh = jnp.zeros(ray_mesh_shape + val.shape[1:], dtype=conf.float_dtype)

@@ -102,11 +102,11 @@ def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1, d
     # # limiting resolution
     # lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
     # print(f"{'res lim':>15} = {lambda_lim*180*60/jnp.pi:.2e} [arcmin]")
-    # printy mesh grid
-    print(f"{'ray_cell_size':>15} = {nu_2D*180*60/jnp.pi:.2e} [arcmin]")
     # # print log2 mesh grid
     # print(f"{'log2_N_2D_x':>15} = {jnp.log2(Nx)}, {'log2_N_2D_y':>15} = {jnp.log2(Ny)}")
-    print("ray_mesh_shape", (Nx, Ny))
+    # printy mesh grid
+    # print(f"{'ray_cell_size':>15} = {nu_2D*180*60/jnp.pi:.2e} [arcmin]")
+    # print("ray_mesh_shape", (Nx, Ny))
 
     return nu_2D.astype(dtype), (Nx, Ny)
 

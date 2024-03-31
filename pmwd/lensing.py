@@ -65,9 +65,9 @@ def grad_phi(a_c, ptcl, cosmo, conf):
     dens = scatter(ptcl, conf) # mesh_shape
     dens -= 1  # overdensity
     dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype) 
-    dens *= (cosmo.h)**2 # H0^2 term
-    dens /= a_c # potential is evaluated at the middle of the time step
-
+    # dens *= (cosmo.h)**2 # H0^2 term
+    # dens /= a_c 
+    # # potential is evaluated at the middle of the time step
     # Solve Poisson's equation for the potential
     dens = fftfwd(dens)  # normalization canceled by that of irfftn below
     # print('dens.shape', dens.shape) # fft mesh_shape
@@ -167,7 +167,10 @@ def project(
         coord2D[:, 1] < -mesh2D_mesh_shape[1] * mesh2D_cell_size / 2, 0, 1
     )
     val_mesh3D = val_mesh3D * mask[:, jnp.newaxis]
-
+    # https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
+    
+    ray_mesh_size = mesh2D_mesh_shape[0] * mesh2D_mesh_shape[1]
+    ray_num = conf.ray_num
     val_mesh2D = _scatter_rt(
         # this is place holder; positions of the 3D mesh points are given by 'disp';
         # shape (N_x * N_y * N_z, 2)
@@ -180,7 +183,7 @@ def project(
         mesh=jnp.zeros(mesh2D_mesh_shape + (N_v,), dtype=conf.float_dtype),
         # values of the 3D mesh points
         # shape (N_x * N_y * N_z, N_v)
-        val=val_mesh3D,
+        val=val_mesh3D, #
         # offset of the 2D mesh relative to the 3D mesh points
         offset=ray_mesh_center(mesh2D_cell_size, mesh2D_mesh_shape, dtype=conf.float_dtype),
         # cell size of the 2D mesh
@@ -222,9 +225,10 @@ def deflection_field(a_i, a_f, a_c, ptcl, grad_phi3D, ray_cell_size, ray_mesh_sh
     # y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
     # r_chi: radial comoving distance, shape (N_z,), unit [L]
     x = jnp.arange(conf.mesh_shape[0])*conf.cell_size
-    x -= x.mean()
+    # x -= x.mean()
     y = jnp.arange(conf.mesh_shape[1])*conf.cell_size
-    y -= y.mean()
+    # y -= y.mean()
+    x,y = x-conf.box_size[0]/2,y-conf.box_size[1]/2
     z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
 
     # print(y.max(), y.min(), z.max(), z.min())
@@ -280,8 +284,8 @@ def deflection_field(a_i, a_f, a_c, ptcl, grad_phi3D, ray_cell_size, ray_mesh_sh
     defl_2D_y = fftinv(defl_2D_fft_y, shape=ray_mesh_shape)
     defl_2D_smth = jnp.stack([defl_2D_x, defl_2D_y], axis=-1)
     
-    if chi_i >2200:
-        visual_density_defl2D(ptcl, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
+    # if chi_i >2200:
+    # visual_density_defl2D(ptcl, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
     return defl_2D_smth
 
 def gather_eta(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):

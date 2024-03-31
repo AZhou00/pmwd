@@ -146,6 +146,28 @@ class Rays:
         # print(A.shape) # (ray_num, 2, 2)
         return cls(conf, pmid, disp, eta=eta, deta=deta, A=A, B=B, dB=dB)
 
+    def pos_0(self, dtype=jnp.float32):
+        """Ray positions on the 2d image plane at z=0.
+
+        Parameters
+        ----------
+        dtype : DTypeLike, optional
+            Output float dtype.
+
+        Returns
+        -------
+        pos : jax.Array
+            Ray (image plane, angular) 2d positions in [rad].
+
+        Notes
+        -----
+        There is no wrapping since we are working on angular coordinates.
+        Wrapping only happens in 3d comoving coordinates.
+        """
+        pos = self.pmid.astype(dtype)
+        pos *= self.conf.ray_cell_size_default
+        return pos
+    
     def pos_ip(self, dtype=jnp.float32): 
         #TODO: ask why jnp.64, ok probably becasue we are merging pmid and disp
         #TODO: maybe 32 for ray tracing is good enough. is this a major issue?
@@ -166,15 +188,12 @@ class Rays:
         There is no wrapping since we are working on angular coordinates.
         Wrapping only happens in 3d comoving coordinates.
         """
-        conf = self.conf
-
         # origin is taken to be the center of the ray grid
         pos = self.pmid.astype(dtype)
-        pos *= conf.ray_cell_size_default # note this is not the ray_spaing, but the mesh spacing
+        pos *= self.conf.ray_cell_size_default # note this is not the ray_spaing, but the mesh spacing
         pos += self.disp.astype(dtype) # disp in [rad]
-
         return pos
-
+    
     def pos_3d(self, a, cosmo, conf, dtype=jnp.float32, wrap=True):
         """Ray 3d comoving positions, at the a=a slice.
 

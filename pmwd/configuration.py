@@ -157,7 +157,7 @@ class Configuration:
     # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
     # z_rtlim: float = 0.4
     # a_rtlim: float = 1 / (1 + z_rtlim)
-    z_rtlim: float = 0.6
+    z_rtlim: float = 0.3
     a_rtlim: float = 1 / (1 + z_rtlim)
 
     def __post_init__(self):
