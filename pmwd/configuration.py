@@ -143,6 +143,11 @@ class Configuration:
     growth_inistep: Union[float, None,
                           Tuple[Optional[float], Optional[float]]] = (1, None)
 
+    # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
+    z_rtlim: Optional[float] = 0.2
+    chi_rtmin: Optional[float] = 30
+    mass_rescale: Optional[float] = 1
+    
     lpt_order: int = 2
 
     a_start: float = 1/64
@@ -153,13 +158,6 @@ class Configuration:
     symp_splits: Tuple[Tuple[float, float], ...] = ((0, 0.5), (1, 0.5))
 
     chunk_size: int = 2**24
-
-    # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
-    # z_rtlim: float = 0.4
-    # a_rtlim: float = 1 / (1 + z_rtlim)
-    z_rtlim: float = 0.3
-    a_rtlim: float = 1 / (1 + z_rtlim)
-
     def __post_init__(self):
         if self._is_transforming():
             return
@@ -277,58 +275,10 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             return jnp.array(self.ray_grid_shape).prod().item()
 
-    # @property
-    # def ray_mesh_shape_default(self):
-    #     """Maximum ray mesh shape (at r -> \inf, ray spacing resolution limited)"""
-    #     nu_2D, N_2D_x, N_2D_y = compute_ray_mesh_max(
-    #         mu_2D=self.ray_spacing,
-    #         M_2D_x=self.ray_grid_shape[0],
-    #         M_2D_y=self.ray_grid_shape[1],
-    #         eps=self.ray_mesh_iota,
-    #         p_x=self.ray_mesh_p_x,
-    #         p_y=self.ray_mesh_p_y,
-    #     )
-    #     return N_2D_x, N_2D_y
-
-    # @property
-    # def ray_cell_size_default(self):
-    #     """The mesh cell resolution of the Maximum ray mesh"""
-    #     nu_2D = self.ray_mesh_iota * self.ray_spacing
-    #     # nu_2D, N_2D_x, N_2D_y = compute_ray_mesh_max(
-    #     #     mu_2D=self.ray_spacing,
-    #     #     M_2D_x=self.ray_grid_shape[0],
-    #     #     M_2D_y=self.ray_grid_shape[1],
-    #     #     eps=self.ray_mesh_iota,
-    #     #     p_x=self.ray_mesh_p_x,
-    #     #     p_y=self.ray_mesh_p_y,
-    #     # )
-    #     return nu_2D
-
     @property
     def ray_cell_size_default(self):
         """Particle mesh cell size in [L]."""
         return self.ray_spacing * self.ray_grid_shape[0] / self.ray_mesh_shape_default[0]
-
-    # @property #TODO: is there a difference between computing fov using rays/mesh?
-    # def ray_mesh_fov(self):
-    #     """Field of view in [rad]."""
-    #     return self.ray_cell_size * self.ray_mesh_shape[0], self.ray_cell_size * self.ray_mesh_shape[1]
-
-    # @property
-    # def ray_cell_size(self):
-    #     """image plane mesh cell size in [rad]."""
-    #     return self.ray_spacing * self.ray_grid_shape[0] / self.ray_mesh_shape[0]
-
-    # @property
-    # def ray_cell_area(self):
-    #     """image plane mesh cell area in [rad^2]."""
-    #     return self.ray_cell_size ** 2
-
-    # @property
-    # def ray_mesh_size(self):
-    #     """Number of ray mesh grid points."""
-    #     with jax.ensure_compile_time_eval():
-    #         return jnp.array(self.ray_mesh_shape).prod().item()
 
     @property
     def V(self):
@@ -409,9 +359,16 @@ class Configuration:
     @property
     def a_nbody_ray(self):
         """N-body time integration scale factor steps for backward ray tracing"""
-        index = jnp.argmax(self.a_nbody[::-1]<self.a_rtlim)
-        return self.a_nbody[::-1][:index+1]
+        with jax.ensure_compile_time_eval():
+            index = jnp.argmax(self.a_nbody[::-1]<self.a_rtlim)
+            return self.a_nbody[::-1][:index+1]
 
+    # a_rtlim: float = 1 / (1 + z_rtlim)
+    @property
+    def a_rtlim(self):
+        """Scale factor of the furthest source redshift."""
+        return 1 / (1 + self.z_rtlim)
+    
     @property
     def growth_a(self):
         """Growth function scale factors, for both LPT and N-body, of ``cosmo_dtype``."""

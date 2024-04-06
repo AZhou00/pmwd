@@ -65,8 +65,10 @@ def grad_phi(a_c, ptcl, cosmo, conf):
     dens = scatter(ptcl, conf) # mesh_shape
     dens -= 1  # overdensity
     dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype) 
-    # dens *= (cosmo.h)**2 # H0^2 term
-    # dens /= a_c 
+    dens *= (cosmo.h)**2 # H0^2 term
+    dens /= a_c 
+    # dens *= a_c**2 
+
     # # potential is evaluated at the middle of the time step
     # Solve Poisson's equation for the potential
     dens = fftfwd(dens)  # normalization canceled by that of irfftn below
@@ -124,6 +126,19 @@ def smoothing_gaussian(kvec, width, field):
     field = field * kernel
     return field
 
+def smoothing_tophat(kvec, width, field):
+    """perform 2D tophat smoothing in Fourier space.
+    Args:
+        kvec: kvec from sparse meshgrid.
+        width: width of the tophat kernel in real space.
+        field: field to be smoothed.
+    """
+    kx = kvec[0]
+    ky = kvec[1]
+    kernel = jnp.sinc(kx * width / 2 / jnp.pi)
+    kernel *= jnp.sinc(ky * width / 2 / jnp.pi)
+    field = field * kernel
+    return field
 
 def project(
     val_mesh3D,
@@ -169,8 +184,6 @@ def project(
     val_mesh3D = val_mesh3D * mask[:, jnp.newaxis]
     # https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
     
-    ray_mesh_size = mesh2D_mesh_shape[0] * mesh2D_mesh_shape[1]
-    ray_num = conf.ray_num
     val_mesh2D = _scatter_rt(
         # this is place holder; positions of the 3D mesh points are given by 'disp';
         # shape (N_x * N_y * N_z, 2)
@@ -195,8 +208,36 @@ def project(
     # shape (mesh2D_mesh_shape + (N_v,))
     return val_mesh2D
 
+def mesh3D_coord(conf,chi_i,chi_f):
+    # assumes chi_f - chi_i < conf.box_size[2]
+    # i.e., n_f - n_i = 0 or 1
+    # conf.dim == 3
+    # x: x coordinates of the 3D mesh, shape (N_x,), x.mean() = 0, unit [L]
+    # y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
+    # r_chi: radial comoving distance, shape (N_z,), unit [L]
+ 
+    b = conf.box_size[2] 
+    n_i = chi_i // b
+    n_f = chi_f // b
+    
+    x = jnp.arange(conf.mesh_shape[0])*conf.cell_size
+    y = jnp.arange(conf.mesh_shape[1])*conf.cell_size
+    x,y = x-conf.box_size[0]/2,y-conf.box_size[1]/2
+    
+    z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
+    z += n_i*b
+    z_next_box = z+(n_f-n_i)*b
+    z = jnp.where(z_next_box <= chi_f, z_next_box, z)
+    r_chi = z # TODO: implement r_chi(z)
+    # tuple of 3, each has shape (N_x, N_y, N_z)
+    coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
+    # shape (N_x, N_y, N_z, 3)
+    coord3D = jnp.stack(coord3D, axis=-1)
+    # shape (N_x * N_y * N_z, 3)
+    coord3D = coord3D.reshape(-1, conf.dim)
+    return coord3D, z, r_chi
 
-def deflection_field(a_i, a_f, a_c, ptcl, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf):
+def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf):
     """
     swirl of light rays on the 2d image plane
     a_i: scale factor where the ray tracing begins
@@ -214,43 +255,39 @@ def deflection_field(a_i, a_f, a_c, ptcl, grad_phi3D, ray_cell_size, ray_mesh_sh
     # print('------------------')
     # print('compute lensing maps')
     # print('------------------')
-    print(f"{'a_i':>15} = {a_i}, {'a_f':>15} = {a_f}")
-    print(f"{'chi_i':>15} = {chi_i}, {'chi_f':>15} = {chi_f}")
+    # print(f"{'a_i':>15} = {a_i}, {'a_f':>15} = {a_f}")
+    # print(f"{'chi_i':>15} = {chi_i}, {'chi_f':>15} = {chi_f}")
     # print number of particle mesh planes
     # print(f"{'# planes covered':>15} = {(chi_f-chi_i)/conf.cell_size}")
     # particle mesh ------------------
     # Compute the corresponding mesh coordinate for the 3D particle mesh
     # this is how the mesh is set up
-    # x: x coordinates of the 3D mesh, shape (N_x,), x.mean() = 0, unit [L]
-    # y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
-    # r_chi: radial comoving distance, shape (N_z,), unit [L]
-    x = jnp.arange(conf.mesh_shape[0])*conf.cell_size
-    # x -= x.mean()
-    y = jnp.arange(conf.mesh_shape[1])*conf.cell_size
-    # y -= y.mean()
-    x,y = x-conf.box_size[0]/2,y-conf.box_size[1]/2
-    z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
-
-    # print(y.max(), y.min(), z.max(), z.min())
-    r_chi = z #TODO need a r(chi) function
-    # tuple of 3, each has shape (N_x, N_y, N_z)
-    coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
-    # shape (N_x, N_y, N_z, 3)
-    coord3D = jnp.stack(coord3D, axis=-1)
-    assert conf.dim == 3
-    # shape (N_x * N_y * N_z, 3)
-    coord3D = coord3D.reshape(-1, conf.dim)
-
+    # x = jnp.arange(conf.mesh_shape[0])*conf.cell_size
+    # y = jnp.arange(conf.mesh_shape[1])*conf.cell_size
+    # x,y = x-conf.box_size[0]/2,y-conf.box_size[1]/2
+    # z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
+    # r_chi = z #TODO need a r(chi) function
+    # # tuple of 3, each has shape (N_x, N_y, N_z)
+    # coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
+    # # shape (N_x, N_y, N_z, 3)
+    # coord3D = jnp.stack(coord3D, axis=-1)
+    # assert conf.dim == 3
+    # # shape (N_x * N_y * N_z, 3)
+    # coord3D = coord3D.reshape(-1, conf.dim)
+    coord3D, z, r_chi = mesh3D_coord(conf,chi_i,chi_f)
+    
     # Potential gradient ------------------
+    # reuse grad_phi3D = grad_phi(a_c, ptcl, cosmo, conf) 
     # (mesh_shape + (3,))
-    # grad_phi3D = grad_phi(a_c, ptcl, cosmo, conf) 
-
+    
     # compute lensing kernel on the z axis and broadcast to the x&y axes
     kernel = jnp.where((z>=chi_i) & (z<=chi_f), 2*r_chi/conf.c, 0) # shape (N_z,)
     kernel *= jnp.where(z > 0, 1, 0) # 
     # TODO: add growth factor correction
     kernel *= jnp.ones_like(r_chi)*D_c/D_c
     kernel *= jnp.where(r_chi>0, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi**2, 0)
+    # kernel *= jnp.where(r_chi>conf.chi_rtmin, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi**2, 0)
+
     # grad_phi3D shape = (N_x, N_y, N_z, 3)
     # kernel shape = (N_z,)
     defl_mesh3D = jnp.einsum('xyzv,z->xyzv', grad_phi3D, kernel)
@@ -278,8 +315,12 @@ def deflection_field(a_i, a_f, a_c, ptcl, grad_phi3D, ray_cell_size, ray_mesh_sh
     defl_2D_fft_y = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_y)
     # smooth with smoothing_tophat smoothing_gaussian
     smoothing_width = jnp.max(jnp.array([conf.cell_size / r_c, conf.ray_spacing])).astype(conf.float_dtype)
+    # smoothing_width = ray_cell_size
+    # smoothing_width /= jnp.sqrt(2)
     defl_2D_fft_x = smoothing_gaussian(kvec_ray, smoothing_width, defl_2D_fft_x)
     defl_2D_fft_y = smoothing_gaussian(kvec_ray, smoothing_width, defl_2D_fft_y)
+    # defl_2D_fft_x = smoothing_tophat(kvec_ray, smoothing_width, defl_2D_fft_x)
+    # defl_2D_fft_y = smoothing_tophat(kvec_ray, smoothing_width, defl_2D_fft_y)
     defl_2D_x = fftinv(defl_2D_fft_x, shape=ray_mesh_shape)
     defl_2D_y = fftinv(defl_2D_fft_y, shape=ray_mesh_shape)
     defl_2D_smth = jnp.stack([defl_2D_x, defl_2D_y], axis=-1)
@@ -318,39 +359,12 @@ def gather_eta(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):
 
 
 def lensing(a_i, a_f, a_c, ptcl, ray, grad_phi3D, cosmo, conf):
-    """    # Reshaping here follows this pattern below
-        # A = jnp.arange(12).reshape(3,2,2)
-        # print(A.shape)
-        # print(A)
-        # Ax = A[:,:,0]
-        # Ay = A[:,:,1]
-        # print()
-        # print('Ax \n', Ax)
-        # print('Ay \n', Ay)
-        # Ax = Ax.reshape(-1)
-        # Ay = Ay.reshape(-1)
-        # print()
-        # print('Ax \n', Ax)
-        # print('Ay \n', Ay)
-        # Ax = Ax.reshape(-1,2)
-        # Ay = Ay.reshape(-1,2)
-        # print()
-        # print('Ax \n', Ax)
-        # print('Ay \n', Ay)
-        # A_new = jnp.stack((Ax,Ay), axis=-1)
-        # print(jnp.allclose(A, A_new))
-
-        # deta, f_jvp = linearize(f, ray.pos_ip() )
-        # deta = deta.reshape(-1,2)
-        # dB = f_jvp(ray.A)
-        # print('dB', dB.shape) # (ray_num, 2)
-    """
     
     r_i = distance_ad(a_i, cosmo, conf)
     r_f = distance_ad(a_f, cosmo, conf)
     ray_cell_size, ray_mesh_shape = compute_ray_mesh(r_i, r_f, conf)
-    defl_2D_smth = deflection_field(a_i, a_f, a_c, ptcl, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf)
-    # print defl_2D_smth.shape # (ray_mesh_shape[0], ray_mesh_shape[1], 2)
+    # (ray_mesh_shape[0], ray_mesh_shape[1], 2)
+    defl_2D_smth = deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf)
     f = partial(
         gather_eta,
         ray_pmid=ray.pmid,
@@ -369,13 +383,7 @@ def lensing(a_i, a_f, a_c, ptcl, ray, grad_phi3D, cosmo, conf):
     deta, f_jvp = linearize(f, primals)
     dB_x = f_jvp(Ax) # (ray_num, 2)
     dB_y = f_jvp(Ay) # (ray_num, 2)
-    
-    # # stack two columns vector side by side
     dB = jnp.stack([dB_x, dB_y], axis=-1)
-    
-    # integers -> float0, others use jnp.zeros.
-    # primals = (x,y,z)
-    # f_jvp(x_v, jnp.zeros_like(y), jnp.zeros_like(z))
     return deta, dB
 
 # visualisation ------------------

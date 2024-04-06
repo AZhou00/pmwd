@@ -30,22 +30,26 @@ def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf,ptcl):
     factor /= distance_ad(a_vel, cosmo, conf) ** 2
     factor /= conf.c
     
-    # point mass lens --------------------------------
-    chi_l = 800 # in Mpc
-    chi_s = distance_cm(a_next, cosmo, conf) # in Mpc
-    M = cosmo.ptcl_mass * conf.ptcl_num * (conf.mesh_size / conf.ptcl_num) / 100 # conf.rho_crit * conf.box_vol # cosmo.ptcl_mass * conf.ptcl_num * conf.M *1e10 # conf.rho_crit * conf.box_vol # in kg
-    visual_ray_point_mass(
-        theta0=ray.pos_0(),
-        theta_prev=ray.pos_ip(),
-        theta_s=ray.pos_ip() + factor * ray.eta,
-        chi_l=chi_l,
-        chi_s=chi_s,
-        M=M,
-        conf=conf,
-        ptcl=ptcl
-        )
-    print("max drift [arcmin]", jnp.max(jnp.abs(ray.eta * factor) * 3437.75))
-    # ------------------------------------------------
+    # # point mass lens --------------------------------
+    # chi_l = 770 #653.606 # in [L], i.e., Mpc
+    # chi_s = distance_cm(a_next, cosmo, conf)
+    # if chi_s > chi_l:
+    #     print( "chi_l", chi_l, "chi_s", chi_s,)
+    #     chi_s_prev = distance_cm(a_prev, cosmo, conf)
+    #     M = cosmo.ptcl_mass * conf.ptcl_num * conf.mass_rescale #(conf.mesh_size / conf.ptcl_num) * 
+    #     visual_ray_point_mass(
+    #         theta0=ray.pos_0(),
+    #         theta_prev=ray.pos_ip(),
+    #         theta_s=ray.pos_ip() + factor * ray.eta,
+    #         chi_l=chi_l,
+    #         chi_s_prev=chi_s_prev,
+    #         chi_s=chi_s,
+    #         M=M,
+    #         conf=conf,
+    #         ptcl=ptcl
+    #         )
+    # print("max drift [arcmin]", jnp.max(jnp.abs(ray.eta * factor) * 3437.75))
+    # # ------------------------------------------------
     
     disp = ray.disp + factor * ray.eta 
     A = ray.A + factor * ray.B
@@ -53,25 +57,25 @@ def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf,ptcl):
 
 def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf):
     """Symplectic integration for one step."""
-    print('------------------')
+    # print('------------------')
     D = K = 0
     a_disp = a_vel = a_prev
     for d, k in conf.symp_splits:
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
-            if a_prev<0.9:
-                ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf,ptcl)
+            # if a_prev < 1:
+            ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf, ptcl)
             a_disp = a_disp_next
 
         if k != 0:
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
             a_c = (a_vel + a_vel_next) / 2
-            grad_phi3D = grad_phi(a_c, ptcl, cosmo, conf) 
-            if a_prev<0.9:
-                ray = force_ray(a_vel, a_vel_next, a_c, ptcl, ray, grad_phi3D, cosmo, conf)
-                ray = kick_ray(ray)
+            grad_phi3D = grad_phi(a_c, ptcl, cosmo, conf) / (conf.mesh_size / conf.ptcl_num)
+            # if a_prev < 1:
+            ray = force_ray(a_vel, a_vel_next, a_c, ptcl, ray, grad_phi3D, cosmo, conf)
+            ray = kick_ray(ray)
             a_vel = a_vel_next
     return ray
 
@@ -120,6 +124,8 @@ def nbody_ray_step(a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf):
     obsvbl_ray = observe(ray, obsvbl_ray, cosmo, conf)
     return ray, obsvbl_ray
 
+
+# @jit
 def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True):
     """
     N-body time integration with ray tracing updates.

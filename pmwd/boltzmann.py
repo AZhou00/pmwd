@@ -27,7 +27,7 @@ def distance_tab(cosmo,conf):
     # chi has the same ordering as conf.a_nbody
     # return ccl.comoving_radial_distance(cosmo, conf.a_nbody)  
     """
-    print('fnc: distance_tab; tabulating chi')
+    # print('fnc: distance_tab; tabulating chi')
 
     assert conf.a_nbody.size == 64
     chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
