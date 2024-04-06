@@ -147,13 +147,17 @@ class Configuration:
     z_rtlim: Optional[float] = 0.2
     chi_rtmin: Optional[float] = 30
     mass_rescale: Optional[float] = 1
-    
+
     lpt_order: int = 2
 
     a_start: float = 1/64
     a_stop: float = 1
     a_lpt_maxstep: float = 1/128
     a_nbody_maxstep: float = 1/64
+
+    a_distance_start: float = 1e-3
+    a_distance_stop: float = 1
+    a_distance_num: int = 500
 
     symp_splits: Tuple[Tuple[float, float], ...] = ((0, 0.5), (1, 0.5))
 
@@ -368,11 +372,21 @@ class Configuration:
     def a_rtlim(self):
         """Scale factor of the furthest source redshift."""
         return 1 / (1 + self.z_rtlim)
-    
+
     @property
     def growth_a(self):
         """Growth function scale factors, for both LPT and N-body, of ``cosmo_dtype``."""
         return jnp.concatenate((self.a_lpt, self.a_nbody[1:]))
+
+    @property
+    def distance_a(self):
+        """distance function scale factors for ray tracing, of ``cosmo_dtype``."""
+        return jnp.linspace(
+            self.a_distance_start,
+            self.a_distance_stop,
+            num=self.a_distance_num,
+            dtype=self.cosmo_dtype,
+        )
 
     @property
     def varlin_R(self):
@@ -425,6 +439,7 @@ class Configuration:
         """Number of mesh grid points in the lens plane."""
         with jax.ensure_compile_time_eval():
             return jnp.array(self.lens_mesh_shape).prod().item()
+
 
     # @property
     # def lens_slice_size(self):

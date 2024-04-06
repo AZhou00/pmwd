@@ -269,3 +269,37 @@ def Omega_m_a(a, cosmo):
     a = jnp.asarray(a, dtype=cosmo.conf.cosmo_dtype)
 
     return cosmo.Omega_m / (a**3 * E2(a, cosmo))
+
+def a2z(a):
+    r"""Convert scale factors to redshifts.
+
+    Parameters
+    ----------
+    a : ArrayLike
+        Scale factors.
+
+    Returns
+    -------
+    z : jax.Array of float
+        Redshifts.
+
+    """
+    a = jnp.asarray(a)
+    return 1 / a - 1
+
+def z2a(z):
+    r"""Convert redshifts to scale factors.
+
+    Parameters
+    ----------
+    z : ArrayLike
+        Redshifts.
+
+    Returns
+    -------
+    a : jax.Array of float
+        Scale factors.
+
+    """
+    z = jnp.asarray(z)
+    return 1 / (1 + z)

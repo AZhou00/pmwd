@@ -4,7 +4,7 @@ from jax.lax import dynamic_slice_in_dim
 from pmwd.scatter import scatter,_scatter_rt
 from pmwd.gather import gather, _gather_rt
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
-from pmwd.boltzmann import distance_cm, distance_ad, growth
+# from pmwd.boltzmann import distance_cm, distance_ad, growth
 # from pmwd.ray_mesh import compute_ray_mesh
 
 # from functools import partial

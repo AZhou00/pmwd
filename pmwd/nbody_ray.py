@@ -3,7 +3,7 @@ from functools import partial
 from jax import value_and_grad, jit, vjp, custom_vjp
 import jax.numpy as jnp
 
-from pmwd.boltzmann import growth, distance_cm, distance_ad
+from pmwd.boltzmann import growth, chi_a, r_a
 from pmwd.gravity import gravity
 from pmwd.lensing import grad_phi, lensing
 from pmwd.nbody import nbody_init, nbody_step
@@ -26,16 +26,16 @@ def drift_ray(a_vel, a_prev, a_next, ray, cosmo, conf,ptcl):
     Drift.
     factor = (chi_{n+1}-\chi_n)/r(\chi_{n+1/2})^2/c
     """
-    factor = distance_cm(a_next, cosmo, conf) - distance_cm(a_prev, cosmo, conf)
-    factor /= distance_ad(a_vel, cosmo, conf) ** 2
+    factor = chi_a(a_next, cosmo, conf) - chi_a(a_prev, cosmo, conf)
+    factor /= r_a(a_vel, cosmo, conf) ** 2
     factor /= conf.c
     
     # # point mass lens --------------------------------
     # chi_l = 770 #653.606 # in [L], i.e., Mpc
-    # chi_s = distance_cm(a_next, cosmo, conf)
+    # chi_s = chi_a(a_next, cosmo, conf)
     # if chi_s > chi_l:
     #     print( "chi_l", chi_l, "chi_s", chi_s,)
-    #     chi_s_prev = distance_cm(a_prev, cosmo, conf)
+    #     chi_s_prev = chi_a(a_prev, cosmo, conf)
     #     M = cosmo.ptcl_mass * conf.ptcl_num * conf.mass_rescale #(conf.mesh_size / conf.ptcl_num) * 
     #     visual_ray_point_mass(
     #         theta0=ray.pos_0(),

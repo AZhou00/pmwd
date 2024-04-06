@@ -14,7 +14,7 @@ from pmwd.cosmology import E2
 from pmwd.util import is_float0_array
 from pmwd.pm_util import enmesh
 
-from pmwd.boltzmann import distance_cm, distance_ad
+from pmwd.boltzmann import chi_a, r_a
 from pmwd.particles import Particles
 
 @partial(pytree_dataclass, aux_fields="conf", frozen=True)
@@ -219,10 +219,10 @@ class Rays:
         """
         conf = self.conf
         
-        pos = self.pos_ip(dtype) * distance_ad(a, cosmo, conf) # shape (ray_num, 2)
+        pos = self.pos_ip(dtype) * r_a(a, cosmo, conf) # shape (ray_num, 2)
         pos += conf.ray_origin # observer origin at the center of the particle mesh at z=0
 
-        pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=distance_cm(a, cosmo, conf))
+        pos_3d = jnp.pad(pos, ((0, 0), (0, 1)), constant_values=chi_a(a, cosmo, conf))
 
         if wrap:
             pos_3d %= jnp.array(conf.box_size, dtype=dtype)

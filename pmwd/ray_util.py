@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib
-from pmwd.boltzmann import distance_cm
+from pmwd.boltzmann import chi_a
 import numpy as np
 # https://github.com/lenstronomy/lenstronomy-tutorials/blob/main/Notebooks/GettingStarted/starting_guide.ipynb
 # https://colab.research.google.com/github/sibirrer/strong_lensing_lectures/blob/main/Lectures/lensing_basics_I.ipynb
@@ -140,7 +140,7 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
     ymin = -conf.box_size[0]/2
     ymax = conf.box_size[0]/2
     
-    chi_s = distance_cm(conf.a_nbody_ray[-1], cosmo, conf)
+    chi_s = chi_a(conf.a_nbody_ray[-1], cosmo, conf)
     
     # box
     ax.plot([xmin,xmin,xmax,xmax,xmin], [ymin,ymax,ymax,ymin,ymin], 'k')
@@ -164,9 +164,9 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
     
     a_lens_planes = np.concatenate([conf.a_nbody_ray, (conf.a_nbody_ray[1:] + conf.a_nbody_ray[:-1]) / 2])
     a_lens_planes = np.sort(a_lens_planes)
-    chi_lens = distance_cm(a_lens_planes, cosmo, conf)
+    chi_lens = chi_a(a_lens_planes, cosmo, conf)
     print('lenses at chi =', chi_lens)
-    print('nbody steps at chi =', distance_cm(conf.a_nbody_ray, cosmo, conf))
+    print('nbody steps at chi =', chi_a(conf.a_nbody_ray, cosmo, conf))
     for chi in chi_lens[1:-1]:
         ax.add_line(plt.Line2D([chi, chi], [theta_min*chi, theta_max*chi], color='b', linestyle='--'))
     

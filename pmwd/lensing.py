@@ -4,7 +4,7 @@ from jax.lax import dynamic_slice_in_dim
 from pmwd.scatter import scatter,_scatter_rt
 from pmwd.gather import gather, _gather_rt
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
-from pmwd.boltzmann import distance_cm, distance_ad, growth
+from pmwd.boltzmann import chi_a, r_a, r_chi, growth, growth_chi
 from pmwd.ray_mesh import compute_ray_mesh, ray_mesh_center
 
 from functools import partial
@@ -208,13 +208,13 @@ def project(
     # shape (mesh2D_mesh_shape + (N_v,))
     return val_mesh2D
 
-def mesh3D_coord(conf,chi_i,chi_f):
+def mesh3D_coord(chi_i,chi_f, cosmo, conf):
     # assumes chi_f - chi_i < conf.box_size[2]
     # i.e., n_f - n_i = 0 or 1
     # conf.dim == 3
     # x: x coordinates of the 3D mesh, shape (N_x,), x.mean() = 0, unit [L]
     # y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
-    # r_chi: radial comoving distance, shape (N_z,), unit [L]
+    # r: radial comoving distance, shape (N_z,), unit [L]
  
     b = conf.box_size[2] 
     n_i = chi_i // b
@@ -228,14 +228,14 @@ def mesh3D_coord(conf,chi_i,chi_f):
     z += n_i*b
     z_next_box = z+(n_f-n_i)*b
     z = jnp.where(z_next_box <= chi_f, z_next_box, z)
-    r_chi = z # TODO: implement r_chi(z)
+    r = r_chi(z, cosmo, conf)
     # tuple of 3, each has shape (N_x, N_y, N_z)
-    coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
+    coord3D = jnp.meshgrid(*[x, y, r], indexing="ij")
     # shape (N_x, N_y, N_z, 3)
     coord3D = jnp.stack(coord3D, axis=-1)
     # shape (N_x * N_y * N_z, 3)
     coord3D = coord3D.reshape(-1, conf.dim)
-    return coord3D, z, r_chi
+    return coord3D, z, r
 
 def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf):
     """
@@ -247,9 +247,9 @@ def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_sh
     all calculations follow unit in L=[Mpc] and T=[1/H0]
     """
     
-    chi_i = distance_cm(a_i, cosmo, conf)
-    chi_f = distance_cm(a_f, cosmo, conf)
-    r_c = distance_ad(a_c, cosmo, conf)
+    chi_i = chi_a(a_i, cosmo, conf)
+    chi_f = chi_a(a_f, cosmo, conf)
+    r_c = r_a(a_c, cosmo, conf)
     D_c = growth(a_c, cosmo, conf, order=1, deriv=0)
 
     # print('------------------')
@@ -260,33 +260,19 @@ def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_sh
     # print number of particle mesh planes
     # print(f"{'# planes covered':>15} = {(chi_f-chi_i)/conf.cell_size}")
     # particle mesh ------------------
-    # Compute the corresponding mesh coordinate for the 3D particle mesh
-    # this is how the mesh is set up
-    # x = jnp.arange(conf.mesh_shape[0])*conf.cell_size
-    # y = jnp.arange(conf.mesh_shape[1])*conf.cell_size
-    # x,y = x-conf.box_size[0]/2,y-conf.box_size[1]/2
-    # z = jnp.arange(conf.mesh_shape[2])*conf.cell_size
-    # r_chi = z #TODO need a r(chi) function
-    # # tuple of 3, each has shape (N_x, N_y, N_z)
-    # coord3D = jnp.meshgrid(*[x, y, r_chi], indexing="ij")
-    # # shape (N_x, N_y, N_z, 3)
-    # coord3D = jnp.stack(coord3D, axis=-1)
-    # assert conf.dim == 3
-    # # shape (N_x * N_y * N_z, 3)
-    # coord3D = coord3D.reshape(-1, conf.dim)
-    coord3D, z, r_chi = mesh3D_coord(conf,chi_i,chi_f)
+    coord3D, z, r = mesh3D_coord(chi_i,chi_f,cosmo,conf)
     
     # Potential gradient ------------------
     # reuse grad_phi3D = grad_phi(a_c, ptcl, cosmo, conf) 
     # (mesh_shape + (3,))
     
     # compute lensing kernel on the z axis and broadcast to the x&y axes
-    kernel = jnp.where((z>=chi_i) & (z<=chi_f), 2*r_chi/conf.c, 0) # shape (N_z,)
+    kernel = jnp.where((z>=chi_i) & (z<=chi_f), 2*r/conf.c, 0) # shape (N_z,)
     kernel *= jnp.where(z > 0, 1, 0) # 
     # TODO: add growth factor correction
-    kernel *= jnp.ones_like(r_chi)*D_c/D_c
-    kernel *= jnp.where(r_chi>0, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi**2, 0)
-    # kernel *= jnp.where(r_chi>conf.chi_rtmin, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi**2, 0)
+    kernel *= jnp.ones_like(r)*growth_chi(z,cosmo,conf)/D_c
+    kernel *= jnp.where(r>0, conf.ptcl_cell_vol / ray_cell_size**2 / r**2, 0)
+    # kernel *= jnp.where(r>conf.chi_rtmin, conf.ptcl_cell_vol / ray_cell_size**2 / r**2, 0)
 
     # grad_phi3D shape = (N_x, N_y, N_z, 3)
     # kernel shape = (N_z,)
@@ -360,8 +346,8 @@ def gather_eta(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):
 
 def lensing(a_i, a_f, a_c, ptcl, ray, grad_phi3D, cosmo, conf):
     
-    r_i = distance_ad(a_i, cosmo, conf)
-    r_f = distance_ad(a_f, cosmo, conf)
+    r_i = r_a(a_i, cosmo, conf)
+    r_f = r_a(a_f, cosmo, conf)
     ray_cell_size, ray_mesh_shape = compute_ray_mesh(r_i, r_f, conf)
     # (ray_mesh_shape[0], ray_mesh_shape[1], 2)
     defl_2D_smth = deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf)
@@ -718,25 +704,25 @@ def visual_density_defl2D(ptcl, defl_2D_smth, coord3D, conf, chi, chi_i, chi_f, 
     #     coords = jnp.meshgrid(*[x,y,z], indexing='ij')
     #     coords = jnp.stack(coords, axis=-1).reshape(-1, conf.dim)  # shape (conf.lens_mesh_size, 3)
     #     coord_z = coords[:,2] # shape (conf.lens_mesh_size,)
-    #     r_chi = coord_z # TODO: add r(chi) function, maybe this can be cached
+    #     r = coord_z # TODO: add r(chi) function, maybe this can be cached
     #     # print('shape of coord_z_angular_diam', coord_z_angular_diam.shape)
 
     #     # compute the 2d image plane coordiante of each 3d mesh point
     #     coords -= jnp.array([conf.ray_origin[0], conf.ray_origin[1], 0])
-    #     coords /= (r_chi+1e-2)[:,jnp.newaxis] # shape (conf.lens_mesh_size, 3) TODO: stability at coord_z=0
+    #     coords /= (r+1e-2)[:,jnp.newaxis] # shape (conf.lens_mesh_size, 3) TODO: stability at coord_z=0
     #     # print(jnp.unique(coords))
     #     coord2D = coords[:,0:2] # drop the z coords, shape (lens_mesh_size, 2)
     #     # print(jnp.unique(coords))
 
-    # val_2d = project(val_mesh3D=grad_mesh, x=x, y=y, r_chi=z, mesh2D_mesh_shape, mesh2D_cell_size, conf=conf, dim=conf.dim, )
+    # val_2d = project(val_mesh3D=grad_mesh, x=x, y=y, r=z, mesh2D_mesh_shape, mesh2D_cell_size, conf=conf, dim=conf.dim, )
 
     # # compute lens kernel as a function radial comoving distance
     # # TODO: add growth factor correction
     # # for mesh point outside the lens plane, the kernel is set to 0
-    # lens_kernel = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), 2*r_chi/conf.c, 0) # (conf.lens_mesh_size,)
+    # lens_kernel = jnp.where((coord_z>=chi_i) & (coord_z<=chi_f), 2*r/conf.c, 0) # (conf.lens_mesh_size,)
     # # scaling by cell
-    # lens_kernel *= jnp.where(r_chi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / r_chi**2, 0) # (conf.lens_mesh_size,)
-    # # lens_kernel /= jnp.where(r_chi>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / r_chi**2, jnp.ones_like(coord_z)*1e6) # (conf.lens_mesh_size,)
+    # lens_kernel *= jnp.where(r>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / r**2, 0) # (conf.lens_mesh_size,)
+    # # lens_kernel /= jnp.where(r>0, conf.ptcl_cell_vol / conf.ray_spacing**2 / r**2, jnp.ones_like(coord_z)*1e6) # (conf.lens_mesh_size,)
     # # print(lens_kernel)
 
     # # apply the lens kernel

@@ -1,140 +1,93 @@
-from jax import jit, custom_vjp, ensure_compile_time_eval
+from jax import jit, custom_vjp, ensure_compile_time_eval, vmap
 import jax.numpy as jnp
 
 from pmwd.cosmology import H_deriv, Omega_m_a
 from pmwd.ode_util import odeint
+from jax.scipy.integrate import trapezoid
 
 @jit
-def distance_tab(cosmo,conf):
-    """Tabulate the distance function
+def chi_integ(a_start, cosmo, conf):
+        """
+        Calculate the comoving distance from the observer at a=1 to a given scale factor in a flat LambdaCDM universe.
+        
+        Parameters:
+        - a: Scale factor of the universe.
+        - H0: Hubble constant at the current time in km/s/Mpc.
+        - Omega_m: Matter density parameter.
+        - Omega_r: Radiation density parameter.
+        - Omega_de: Dark energy density parameter.
+        - c: Speed of light in km/s (default is 299792.458 km/s).
+        
+        Returns:
+        - Comoving distance in Mpc.
+        """
+        Omega_k = cosmo.Omega_k
+        Omega_m = cosmo.Omega_m
+        Omega_r = 0 #TODO: cosmo.Omega_r
+        Omega_de = cosmo.Omega_de
+        
+        a = jnp.linspace(a_start, 1, 1000)
+        H_a = cosmo.h * jnp.sqrt(Omega_m * a**-3 + Omega_r * a**-4 + Omega_k * a**-2 + Omega_de)
+        integrand = conf.c / (a**2 * H_a)
+        integral = trapezoid(integrand, x=a)
+        
+        return integral
 
-    Parameters
-    ----------
-    cosmo : Cosmology
-    conf : Configuration
+def chi_tab(cosmo, conf):
+    """Compute the comoving distances chi(a)"""
+    distance_f = jit(vmap(chi_integ, in_axes=(0, None, None)))
+    distance = distance_f(conf.distance_a, cosmo, conf)
+    return cosmo.replace(distance=distance)
 
-    Returns
-    -------
-    cosmo : Cosmology
-        A new instance containing a distance table, in shape
-        ``conf.a_nbody.size`` and precision ``cosmo.dtype``.
-
-    # import pyccl as ccl
-    # cosmo = ccl.Cosmology(Omega_c=0.3, Omega_b=0.05,
-    #                         h=0.7, n_s=0.96, sigma8=0.8,
-    #                         transfer_function='bbks')
-    # comoving distance in Mpc
-    # chi has the same ordering as conf.a_nbody
-    # return ccl.comoving_radial_distance(cosmo, conf.a_nbody)  
-    """
-    # print('fnc: distance_tab; tabulating chi')
-
-    assert conf.a_nbody.size == 64
-    chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
-        7388.528,  7114.592,  6851.573,  6598.427,  6354.291,  6118.441,  5890.271,  5669.258,  5454.959,  5246.988,  5045.009,
-        4848.729,  4657.887,  4472.253,  4291.62 ,  4115.804,  3944.635,  3777.959,  3615.635,  3457.532,  3303.526,  3153.503,
-        3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
-        1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
-         591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
-    return cosmo.replace(distance=chi)
-
-def distance_cm(a, cosmo, conf):
-    """Compute the comoving distances chi(a)
-
-    Parameters
-    ----------
-    a : ArrayLike
-        Scale factors.
-    cosmo : Cosmology
-    conf : Configuration
-
-    Returns
-    -------
-    chi : jax.Array
-        Comoving disatnce in Mpc
-
-    Raises
-    ------
-    ValueError
-        If ``cosmo.distance`` table is empty.
-
-    """
-    if cosmo.growth is None:
-        raise ValueError('Distance table is empty. Call distance_tab or boltzmann first.')
-
+def chi_a(a, cosmo, conf):
+    """Compute the comoving distances chi(a)"""
+    if cosmo.distance is None:
+        raise ValueError('Distance table is empty. Call chi_tab or boltzmann first.')
+    
     a = jnp.asarray(a)
     float_dtype = jnp.promote_types(a.dtype, float)
-
-    chi = jnp.interp(a, conf.a_nbody, cosmo.distance)
+    
+    chi = jnp.interp(a, conf.distance_a, cosmo.distance)
+    
     return chi.astype(float_dtype)
 
-def distance_ad(a, cosmo, conf):
-    """Compute the radialn angular diameter comoving disatnce
-
-    Parameters
-    ----------
-    a : ArrayLike
-        Scale factors.
-    cosmo : Cosmology
-    conf : Configuration
-
-    Returns
-    -------
-    r(chi) : jax.Array
-        Comoving disatnce in Mpc
-
-    Raises
-    ------
-    ValueError
-        If ``cosmo.distance`` table is empty.
-
-    """
-    if cosmo.growth is None:
-        raise ValueError('Distance table is empty. Call distance_tab or boltzmann first.')
-
+def r_a(a, cosmo, conf):
+    """Compute the radial angular diameter distance r(a)"""
+    if cosmo.distance is None:
+        raise ValueError('Distance table is empty. Call chi_tab or boltzmann first.')
+    
     a = jnp.asarray(a)
     float_dtype = jnp.promote_types(a.dtype, float)
+    
+    r = jnp.interp(a, conf.distance_a, cosmo.distance)
+    
+    return r.astype(float_dtype)
 
-    chi = jnp.interp(a, conf.a_nbody, cosmo.distance)
-    return chi.astype(float_dtype)
+def r_chi(chi, cosmo, conf):
+    """Compute the radial angular diameter distance r(chi)"""
+    ## TODO, do a more general interpolation
+    return chi
 
-def growth(a, cosmo, conf, order=1, deriv=0):
-    """Evaluate interpolation of (LPT) growth function or derivative, the n-th
-    derivatives of the m-th order growth function :math:`\mathrm{d}^n D_m /
-    \mathrm{d}\ln^n a`, at given scale factors. Growth functions are normalized at the
-    matter dominated era instead of today.
+def a_chi(chi, cosmo, conf):
+    """Compute the scale factor a(chi)"""
+    if cosmo.distance is None:
+        raise ValueError('Distance table is empty. Call chi_tab or boltzmann first.')
 
-    Parameters
-    ----------
-    a : ArrayLike
-        Scale factors.
-    cosmo : Cosmology
-    conf : Configuration
-    order : int in {1, 2}, optional
-        Order of growth function.
-    deriv : int in {0, 1, 2}, optional
-        Order of growth function derivatives.
+    chi = jnp.asarray(chi)
+    float_dtype = jnp.promote_types(chi.dtype, float)
 
-    Returns
-    -------
-    D : jax.Array of (a * 1.).dtype
-        Growth functions or derivatives.
+    # need to sort xp in ascending order
+    a = jnp.interp(chi, cosmo.distance[::-1], conf.distance_a[::-1])
 
-    Raises
-    ------
-    ValueError
-        If ``cosmo.growth`` table is empty.
+    return a.astype(float_dtype)
 
-    """
-    if cosmo.growth is None:
-        raise ValueError('Growth table is empty. Call growth_integ or boltzmann first.')
-
-    a = jnp.asarray(a)
-    float_dtype = jnp.promote_types(a.dtype, float)
-
-    D = a**order * jnp.interp(a, conf.growth_a, cosmo.growth[order-1][deriv])
-
-    return D.astype(float_dtype)
+def growth_chi(chi, cosmo, conf, order=1, deriv=0):
+    """Compute the growth function D(chi)"""
+    a = conf.distance_a
+    D_interp = growth(a, cosmo, conf, order, deriv)
+    chi_interp = chi_a(a, cosmo, conf)
+    D = jnp.interp(chi, chi_interp[::-1], D_interp[::-1])
+    return D
 
 @jit
 def transfer_integ(cosmo, conf):
@@ -505,7 +458,7 @@ def boltzmann(cosmo, conf, transfer=True, growth=True, varlin=True, distance=Tru
         cosmo = cosmo.replace(varlin=None)
 
     if distance:
-        cosmo = distance_tab(cosmo, conf)
+        cosmo = chi_tab(cosmo, conf)
 
     return cosmo
 
