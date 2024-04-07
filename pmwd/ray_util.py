@@ -133,46 +133,124 @@ def visual_ray_point_mass(theta0, theta_prev, theta_s, chi_l, chi_s_prev, chi_s,
 def lens_plane_diagram(cosmo, conf, chi_l=None):
     from matplotlib.patches import Arc
 
-    f, ax = plt.subplots(1,1,figsize=(12,12))
-    
+    f, ax = plt.subplots(1,1,figsize=(16,5))
+
     xmin = 0
     xmax = conf.box_size[2]
     ymin = -conf.box_size[0]/2
     ymax = conf.box_size[0]/2
-    
+
     chi_s = chi_a(conf.a_nbody_ray[-1], cosmo, conf)
-    
+
     # box
-    ax.plot([xmin,xmin,xmax,xmax,xmin], [ymin,ymax,ymax,ymin,ymin], 'k')
-    
-    # light cones arc
-    theta_min = np.arctan2(-conf.box_size[0]/2, chi_s)
-    theta_max = np.arctan2(conf.box_size[0]/2, chi_s)
-    
+    xmin = 0
+    xmax = conf.box_size[2]
+    n = 0
+    while xmax <= chi_s+conf.box_size[2]:
+        ax.plot([xmin,xmin,xmax,xmax,xmin], [ymin,ymax,ymax,ymin,ymin], '#333333', lw=2, alpha=1)
+        xmin += conf.box_size[2]
+        xmax += conf.box_size[2]
+        n += 1
+
     ip_fov = conf.ray_spacing * conf.ray_grid_shape[0] # in radians
     theta_min = -ip_fov / 2
     theta_max = ip_fov / 2
-    
-    ax.add_patch(Arc((0,0), 2*chi_s, 2*chi_s, angle=0, theta1=theta_min*180/np.pi, theta2=theta_max*180/np.pi, color='r'))
-    # light cones lines
+    # light cone
+
+    # lens planes
+    lens_color = ['#8ecae6', '#fcbf49']
+    a_lens_planes = np.concatenate([conf.a_nbody_ray, (conf.a_nbody_ray[1:] + conf.a_nbody_ray[:-1]) / 2,])
+    a_lens_planes = np.sort(a_lens_planes)
+    chi_lens = chi_a(a_lens_planes, cosmo, conf)
+    n_lens = 0
+    for chi in chi_lens[:-1]:
+        n_lens += 1
+
+        if n_lens % 2 == 0:
+            color = lens_color[0]
+            ax.add_line(
+                plt.Line2D(
+                    [chi, chi],
+                    [theta_max * chi, conf.box_size[0]*2/3],
+                    color='k',
+                    linestyle=":",
+                    lw=1,
+                )
+            )
+            ax.text(
+                chi,
+                conf.box_size[0] * 2 / 3 * 1.07,
+                f"{chi:.0f}",
+                ha="center",
+                va="bottom",
+                rotation=65,
+                fontsize=11,
+            )  # $[\mathrm{{Mpc}}]$
+
+        else:
+            color = lens_color[1]
+            ax.add_line(
+                plt.Line2D(
+                    [chi, chi],
+                    [-conf.box_size[0]*2/3, theta_min * chi, ],
+                    color='k',
+                    linestyle=":",
+                    lw=1,
+                )
+            )
+            ax.text(
+                chi,
+                - conf.box_size[0] * 2 / 3 * 1.6,
+                f"{chi:.0f}",
+                ha="center",
+                va="bottom",
+                rotation=65,
+                fontsize=11,
+            )  # $[\mathrm{{Mpc}}]$
+            
+        ax.add_line(
+            plt.Line2D(
+                [chi, chi],
+                [theta_min * chi, theta_max * chi],
+                color=color,
+                linestyle="-",
+                lw=1.3,
+            )
+        )
+
+    # arc
+    light_cone_color = '#c1121f'
+    ax.add_patch(
+        Arc(
+            (0, 0),
+            2 * chi_s,
+            2 * chi_s,
+            angle=0,
+            theta1=theta_min * 180 / np.pi,
+            theta2=theta_max * 180 / np.pi,
+            color=light_cone_color,
+            lw=2,
+        )
+    )
+    # lines
     x1 = chi_s * np.cos(theta_min)
     x2 = chi_s * np.cos(theta_max)
     y1 = chi_s * np.sin(theta_min)
     y2 = chi_s * np.sin(theta_max)
-    ax.add_line(plt.Line2D([0, x1], [0, y1], color='r'))
-    ax.add_line(plt.Line2D([0, x1], [0, y2], color='r'))
-    
-    a_lens_planes = np.concatenate([conf.a_nbody_ray, (conf.a_nbody_ray[1:] + conf.a_nbody_ray[:-1]) / 2])
-    a_lens_planes = np.sort(a_lens_planes)
-    chi_lens = chi_a(a_lens_planes, cosmo, conf)
-    print('lenses at chi =', chi_lens)
-    print('nbody steps at chi =', chi_a(conf.a_nbody_ray, cosmo, conf))
-    for chi in chi_lens[1:-1]:
-        ax.add_line(plt.Line2D([chi, chi], [theta_min*chi, theta_max*chi], color='b', linestyle='--'))
-    
+    ax.add_line(plt.Line2D([0, x1], [0, y1], color=light_cone_color,lw=2,))
+    ax.add_line(plt.Line2D([0, x1], [0, y2], color=light_cone_color,lw=2,))
+
     if chi_l is not None:
         # plot lensing mass
         ax.plot(chi_l, 0, 'kx')
-    
+
     ax.set_aspect('equal')
+    ax.set_xlim(-75, n*conf.box_size[2]+75)
+    ax.set_ylim(-conf.box_size[0]*1.25, conf.box_size[0]*1.25)
+    ax.set_xlabel(r'$\chi$ [Mpc]', fontsize=14)
+    ax.set_ylabel(r'$\chi$ [Mpc]', fontsize=14)
+    # tick size
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    # grid lines
+    ax.grid(which='both')
     plt.show()

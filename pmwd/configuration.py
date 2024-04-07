@@ -145,7 +145,7 @@ class Configuration:
 
     # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
     z_rtlim: Optional[float] = 0.2
-    chi_rtmin: Optional[float] = 30
+    chi_rtmin: Optional[float] = 100
     mass_rescale: Optional[float] = 1
 
     lpt_order: int = 2
@@ -160,8 +160,19 @@ class Configuration:
     a_distance_num: int = 500
 
     symp_splits: Tuple[Tuple[float, float], ...] = ((0, 0.5), (1, 0.5))
-
     chunk_size: int = 2**24
+    
+    # SO related
+    # type of SO method
+    # None: no SO applied
+    # 'SR': Symbolic Regression expression
+    # 'NN': Neural Net: f(k_i) * g(k_1, k_2, k_3)
+    so_type: Optional[str] = None
+    # list of the number of nodes (no input layer) of so nn
+    so_nodes: Optional[list] = None
+    soft_i: Optional[str] = None
+    softening_length: Optional[float] = None
+    
     def __post_init__(self):
         if self._is_transforming():
             return
@@ -364,7 +375,7 @@ class Configuration:
     def a_nbody_ray(self):
         """N-body time integration scale factor steps for backward ray tracing"""
         with jax.ensure_compile_time_eval():
-            index = jnp.argmax(self.a_nbody[::-1]<self.a_rtlim)
+            index = jnp.argmax(self.a_nbody[::-1]<=self.a_rtlim)
             return self.a_nbody[::-1][:index+1]
 
     # a_rtlim: float = 1 / (1 + z_rtlim)
@@ -399,46 +410,47 @@ class Configuration:
         to the particle mesh. This is used to shift the observer to the center of the x-y-(z=0) plane
         """
         return jnp.array([self.ptcl_grid_shape[0]*self.ptcl_spacing/2, 
-                          self.ptcl_grid_shape[1]*self.ptcl_spacing/2])
+                          self.ptcl_grid_shape[1]*self.ptcl_spacing/2],dtype=self.float_dtype)
 
-    @property
-    def mesh_chi(self):
-        # comoving coordinates of the particle mesh in z direction
-        # observer at chi = 0, chi increases away from the observer
-        return self.cell_size * jnp.arange(self.mesh_shape[2])
+    
+    # @property
+    # def mesh_chi(self):
+    #     # comoving coordinates of the particle mesh in z direction
+    #     # observer at chi = 0, chi increases away from the observer
+    #     return self.cell_size * jnp.arange(self.mesh_shape[2])
 
-    @property
-    def lens_mesh_shape(self):
-        """Shape of the lens plane mesh grid.
-        Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane can be computed.
-        The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
-        integrate the lensing potential. 
-        """
-        # chi has the same ordering as conf.a_nbody
-        # chi = distance_cm(self.a_nbody, cosmo, conf)
-        # hard code for now:
-        assert self.a_nbody.size == 64
-        chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
-            7388.528,  7114.592,  6851.573,  6598.427,  6354.291,  6118.441,  5890.271,  5669.258,  5454.959,  5246.988,  5045.009,
-            4848.729,  4657.887,  4472.253,  4291.62 ,  4115.804,  3944.635,  3777.959,  3615.635,  3457.532,  3303.526,  3153.503,
-            3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
-            1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
-         591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
+    # @property
+    # def lens_mesh_shape(self):
+    #     """Shape of the lens plane mesh grid.
+    #     Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane can be computed.
+    #     The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
+    #     integrate the lensing potential. 
+    #     """
+    #     # chi has the same ordering as conf.a_nbody
+    #     # chi = distance_cm(self.a_nbody, cosmo, conf)
+    #     # hard code for now:
+    #     assert self.a_nbody.size == 64
+    #     chi =  jnp.array([12185.4  , 11380.87 , 10761.901, 10239.586,  9779.245,  9363.047,  8980.4  ,  8624.407,  8290.289,  7974.573,  7674.657,
+    #         7388.528,  7114.592,  6851.573,  6598.427,  6354.291,  6118.441,  5890.271,  5669.258,  5454.959,  5246.988,  5045.009,
+    #         4848.729,  4657.887,  4472.253,  4291.62 ,  4115.804,  3944.635,  3777.959,  3615.635,  3457.532,  3303.526,  3153.503,
+    #         3007.352,  2864.971,  2726.261,  2591.124,  2459.469,  2331.206,  2206.247,  2084.508,  1965.905,  1850.356,  1737.781,
+    #         1628.101,  1521.24 ,  1417.122,  1315.671,  1216.816,  1120.484,  1026.605,   935.11 ,   845.931,   759.003,   674.261,
+    #      591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
 
-        # the max slice size is defined by the comoving distance covered by one time step update
-        # that includes z_rtlim
-        chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
-        id_chi_upperbound = jnp.where(chi >= chi_rtlim)[0][-1] # chi is decreasingly sorted
-        id_chi_lowerbound = jnp.where(chi <= chi_rtlim)[0][0] # chi is decreasingly sorted
-        delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h
-        len_z = int(delta_chi / self.cell_size * 2 / 3 ) # 1/2 should be good enough, but let's be safe for now
-        return (self.mesh_shape[0], self.mesh_shape[1], len_z)
+    #     # the max slice size is defined by the comoving distance covered by one time step update
+    #     # that includes z_rtlim
+    #     chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
+    #     id_chi_upperbound = jnp.where(chi >= chi_rtlim)[0][-1] # chi is decreasingly sorted
+    #     id_chi_lowerbound = jnp.where(chi <= chi_rtlim)[0][0] # chi is decreasingly sorted
+    #     delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h
+    #     len_z = int(delta_chi / self.cell_size * 2 / 3 ) # 1/2 should be good enough, but let's be safe for now
+    #     return (self.mesh_shape[0], self.mesh_shape[1], len_z)
 
-    @property
-    def lens_mesh_size(self):
-        """Number of mesh grid points in the lens plane."""
-        with jax.ensure_compile_time_eval():
-            return jnp.array(self.lens_mesh_shape).prod().item()
+    # @property
+    # def lens_mesh_size(self):
+    #     """Number of mesh grid points in the lens plane."""
+    #     with jax.ensure_compile_time_eval():
+    #         return jnp.array(self.lens_mesh_shape).prod().item()
 
 
     # @property

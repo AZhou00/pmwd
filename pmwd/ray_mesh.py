@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import jax
 from functools import reduce
-
+from functools import partial
 
 def fftlen(n, platform=None):
     """Find the next fast length for FFT on the platform.

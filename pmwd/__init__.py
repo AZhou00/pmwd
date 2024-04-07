@@ -7,6 +7,7 @@ from pmwd.boltzmann import (transfer_integ, transfer_fit, transfer, growth_integ
                             growth, varlin_integ, varlin, boltzmann, linear_power)
 from pmwd.particles import (Particles, ptcl_enmesh,
                             ptcl_pos, ptcl_rpos, ptcl_rsd, ptcl_los)
+from pmwd.rays import (Rays)
 from pmwd.scatter import scatter
 from pmwd.gather import gather
 from pmwd.gravity import laplace, neg_grad, gravity
