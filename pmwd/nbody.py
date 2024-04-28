@@ -222,6 +222,28 @@ def nbody(ptcl, obsvbl, cosmo, conf, reverse=False):
         ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
     return ptcl, obsvbl
 
+def nbody_vis(ptcl, obsvbl, cosmo, conf, reverse=False, folder=''):
+    import os
+    import numpy as np
+    from pmwd import scatter
+    """N-body time integration."""
+    a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
+    ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
+    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
+        ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
+        dens = scatter(ptcl, conf)
+        filename = os.path.join(folder, f'{(a_prev+a_next)/2:.5f}.npz')
+        np.savez(
+            filename,
+            a=(a_prev+a_next)/2, 
+            mesh_cell_size=conf.cell_size,
+            mesh_shape=conf.mesh_shape,
+            ptcl_spacing=conf.ptcl_spacing,
+            ptcl_shape=conf.ptcl_grid_shape,
+            ptcl_pos=ptcl.pos(),
+            dens = dens,
+        )
+    return ptcl, obsvbl
 
 @jit
 def nbody_adj_init(a, ptcl, ptcl_cot, obsvbl_cot, cosmo, conf):

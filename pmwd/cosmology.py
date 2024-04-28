@@ -71,7 +71,11 @@ class Cosmology:
 
     varlin: Optional[Array] = field(default=None, compare=False)
 
-    distance: Optional[Array] = field(default=None, compare=False)
+    chi: Optional[Array] = field(default=None, compare=False)
+    
+    r: Optional[Array] = field(default=None, compare=False)
+    
+    AD: Optional[Array] = field(default=None, compare=False)
 
     # list of parameters of SO neural nets
     so_params: Optional[list[FrozenDict]] = None

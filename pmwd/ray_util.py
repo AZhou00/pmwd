@@ -1,8 +1,11 @@
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib
+from pmwd import scatter
 from pmwd.boltzmann import chi_a
+from pmwd.lensing import mesh3D_coord, project
 import numpy as np
+
 # https://github.com/lenstronomy/lenstronomy-tutorials/blob/main/Notebooks/GettingStarted/starting_guide.ipynb
 # https://colab.research.google.com/github/sibirrer/strong_lensing_lectures/blob/main/Lectures/lensing_basics_I.ipynb
 
@@ -20,7 +23,8 @@ def point_mass_deflection(theta0, chi_l, chi_s, M, conf, unit = 'arcmin'):
         Comoving distance to source, shape = () or [ray_num], in Mpc
     M : float
         Mass of the lens, shape = () or [ray_num], in M
-        
+    unit: str
+        unit of the output, 'arcmin' or 'radian'
     Returns
     -------
     theta_s : float
@@ -29,10 +33,16 @@ def point_mass_deflection(theta0, chi_l, chi_s, M, conf, unit = 'arcmin'):
     # jnp.abs(theta0,axis=-1) # has shape [ray_num]/
     chi_ls = chi_s - chi_l
     theta0_mag = jnp.linalg.norm(theta0,axis=1)[:,None]
+    
     alpha = 4 * conf.G * M / (conf.c ** 2)
     alpha *= (chi_ls / chi_s / chi_l)  * (theta0 / theta0_mag**2)
-    theta_s = theta0 - alpha
     
+    b = theta0_mag * chi_l
+    factor = conf.G * M / (conf.c ** 2) / b
+    alpha_hat = 4 * factor + 15/4 * jnp.pi * factor**2
+    alpha = (chi_ls / chi_s) * alpha_hat * (theta0 / theta0_mag)    
+    
+    theta_s = theta0 - alpha
     if unit == 'arcmin':
         theta_s *= 180*60/jnp.pi
         alpha *= 180*60/jnp.pi
@@ -254,3 +264,272 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
     # grid lines
     ax.grid(which='both')
     plt.show()
+
+def lens_plane(lens_thickness, dens, conf, chi_i, chi_f, ray_mesh_shape, ray_cell_size, cosmo):
+    # dens is a Nx, Ny, Nz array of density field, with periodic boundary condition
+    # z has shape Nz labels the comoving distance chi value in z direction
+    coord3D, z, r = mesh3D_coord(chi_i, chi_f, cosmo, conf)
+    
+    chi_mid = (chi_i + chi_f) / 2
+    # index of lens plabe closest to chi_mid
+    j = jnp.argmin(jnp.abs(z - chi_mid))
+    # select +- lens_thickness many planes from the z that is closest to chi_mid, with periodic boundary condition
+    # start from the smaller end of z
+    # total length in z direction of the lens_mesh3D = 2*lens_thickness + 1
+    if j < lens_thickness:
+        # then the tail is long enough to reach the end of z
+        lens_mesh3D = jnp.concatenate([dens[..., j - lens_thickness:], dens[..., :j + lens_thickness + 1]], axis=-1)
+        # print('j < lens_thickness ,slices have length',dens[..., j - lens_thickness:].shape,dens[..., :j + lens_thickness + 1].shape)
+    else:
+        if j + lens_thickness + 1 > len(z):
+            # then the head is long enough to reach the beginning of z
+            # print(len(z) - j + lens_thickness)
+            lens_mesh3D = jnp.concatenate([dens[..., j - lens_thickness:], dens[..., :lens_thickness - (len(z) - j)+1]], axis=-1)
+            # print('j + lens_thickness + 1 > len(z),slices have length',dens[..., j - lens_thickness:].shape,dens[..., :lens_thickness - (len(z) - j)+1].shape)
+        else:
+            lens_mesh3D = dens[..., j - lens_thickness : j + lens_thickness + 1]
+            # print('else, slices have length',dens[..., j - lens_thickness : j + lens_thickness + 1].shape)
+    assert lens_mesh3D.shape[-1] == 2*lens_thickness + 1, f"lens_mesh3D.shape[-1] = {lens_mesh3D.shape[-1]} != 2*lens_thickness + 1"
+    
+    # project the density plane
+    kernel = jnp.where((z >= chi_i) & (z <= chi_f), 1, 0)
+    kernel *= jnp.where(z > 0, 1, 0)
+    dens_vis = jnp.einsum('xyz,z->xyz', dens, kernel)
+    dens_vis = dens_vis.reshape(-1, 1)
+    lens_mesh2D = project(
+            val_mesh3D=dens_vis,
+            coord3D=coord3D,
+            mesh2D_mesh_shape=ray_mesh_shape,
+            mesh2D_cell_size=ray_cell_size,
+            conf=conf,
+        )
+    return lens_mesh3D, lens_mesh2D[...,0]
+
+
+
+#     lens_mesh2D = project(
+#         val_mesh3D=lens_mesh3D,
+#         coord3D=coord3D,
+#         mesh2D_mesh_shape=ray_mesh_shape,
+#         mesh2D_cell_size=ray_cell_size,
+#         conf=conf,
+#     )
+    
+    
+#     project(
+#     val_mesh3D,
+#     coord3D,
+#     mesh2D_cell_size,
+#     mesh2D_mesh_shape,
+#     conf,
+# )
+    
+#     coord3D 
+    
+#     lens_mesh3D = 
+#     lens_mesh2D = 
+    
+#     f,axs = plt.subplots(2,3,figsize=(36,24),sharex=True,sharey=True)
+
+
+#     # # plot the comoving space projection of the density field
+#     # kernel = jnp.where((chi >= chi_i) & (chi <= chi_f), 1, 0)
+#     # kernel *= jnp.where(chi > 0, 1, 0)
+#     # print('number of planes in projection:',kernel.sum())
+#     # dens_vis = scatter(ptcl, conf)
+#     # dens_vis = jnp.einsum("xyz,z->xyz", dens_vis, kernel)
+#     # dens_vis = dens_vis.sum(axis=2)
+#     # xx, yy = jnp.meshgrid(x, y, indexing='ij')
+#     # # log norm with cut off
+#     # print('max dens:',dens_vis.max(), 'min dens:',dens_vis.min())
+#     # axs[0].pcolormesh(xx, yy, dens_vis, norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+#     # axs[0].set_aspect('equal', adjustable='box')
+#     # axs[0].set_xlabel('x [Mpc]')
+#     # axs[0].set_ylabel('y [Mpc]')
+#     # axs[0].set_title('comoving density field projected along z',fontsize=20)
+
+#     # set up image plane coords
+#     # project density field to the image plane
+#     x = jnp.arange(ray_mesh_shape[0]) * ray_cell_size
+#     x -= x.mean()
+#     y = jnp.arange(ray_mesh_shape[1]) * ray_cell_size
+#     y -= y.mean()
+#     xx, yy = jnp.meshgrid(x, y, indexing="ij")
+#     xx *= 180 / jnp.pi * 60
+#     yy *= 180 / jnp.pi * 60
+#     # field of view
+#     fov = [
+#         conf.ray_grid_shape[0] * conf.ray_spacing * 180 / jnp.pi * 60,
+#         conf.ray_grid_shape[1] * conf.ray_spacing * 180 / jnp.pi * 60,
+#     ]
+#     fov_padded = [
+#         ray_mesh_shape[0] * ray_cell_size * 180 / jnp.pi * 60,
+#         ray_mesh_shape[1] * ray_cell_size * 180 / jnp.pi * 60,
+#     ]
+#     print("field of view [arcmin]:", fov[0], fov[1])
+#     print("padded field of view [arcmin]:", fov_padded[0], fov_padded[1])
+#     # quiver settings
+#     skip = (slice(None, None, 2), slice(None, None, 2))
+
+#     # plot light cone density
+#     dens_vis = scatter(ptcl, conf)
+#     kernel = jnp.where((chi >= chi_i) & (chi <= chi_f), 1, 0)
+#     kernel *= jnp.where(chi > 0, 1, 0)
+#     dens_vis = jnp.einsum('xyz,z->xyz', dens_vis, kernel)
+#     dens_vis = dens_vis.reshape(-1, 1)
+#     dens_vis = project(
+#             val_mesh3D=dens_vis,
+#             coord3D=coord3D,
+#             mesh2D_mesh_shape=ray_mesh_shape,
+#             mesh2D_cell_size=ray_cell_size,
+#             conf=conf,
+#         )
+#     axs[0,0].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+#     axs[1,0].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+#     # # quiver plot of defl_2D
+#     axs[1,0].quiver(
+#         xx[skip],
+#         yy[skip],
+#         defl_2D_smth[..., 0][skip],
+#         defl_2D_smth[..., 1][skip],
+#         color="w",
+#         scale=2e4,
+#     )
+
+#     # plot nonsmoothed deta field
+#     axs[0,1].pcolormesh(xx, yy, defl_2D[...,0])
+#     axs[1,1].pcolormesh(xx, yy, defl_2D[...,1])
+
+#     axs[0,2].pcolormesh(xx, yy, defl_2D_smth[...,0])
+#     axs[1,2].pcolormesh(xx, yy, defl_2D_smth[...,1])
+
+#     axs[0,1].set_title('deta x',fontsize=20)
+#     axs[1,1].set_title('deta y',fontsize=20)
+#     axs[0,2].set_title('smooth & deconv deta x',fontsize=20)
+#     axs[1,2].set_title('smooth & deconv deta y',fontsize=20)
+
+
+#     for ax in axs.flatten():
+#         ax.set_aspect('equal', adjustable='box')
+#         ax.plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
+#         ax.plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
+#         ax.plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+#         ax.plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+#         # ax.set_xlim(-fov[0] / 2, fov[0] / 2)
+#         # ax.set_ylim(-fov[1] / 2, fov[1] / 2)
+#         ax.set_xlabel('x [arcmin]')
+#         ax.set_ylabel('y [arcmin]')
+
+#     plt.show()
+
+#     if diagnostic:
+#         # x_ptcl, y_ptcl, z_ptcl = ptcl.pos().T
+#         # x_ray, y_ray, z_ray = ray.pos_3d(a_i, cosmo, conf, wrap=True).T
+#         # f = plt.figure(figsize=(15, 15))
+#         # f, ax = snapshot(f, ptcl, ray, a_i, cosmo, conf,  wrap=True,elev=-210, azim=-25, roll=80)
+#         # plt.show()
+#         # plt.close(f)
+
+#         f,axs = plt.subplots(1,3,figsize=(36,12))
+
+#         # plot the comoving space projection of the density field
+#         kernel = jnp.where((z >= chi_i) & (z <= chi_f), 1, 0)
+#         kernel *= jnp.where(z > 0, 1, 0)
+#         print('number of planes in projection:',kernel.sum())
+#         dens_vis = scatter(ptcl, conf)
+#         dens_vis = jnp.einsum("xyz,z->xyz", dens_vis, kernel)
+#         dens_vis = dens_vis.sum(axis=2)
+#         xx, yy = jnp.meshgrid(x, y, indexing='ij')
+#         # log norm with cut off
+#         print('max dens:',dens_vis.max(), 'min dens:',dens_vis.min())
+#         axs[0].pcolormesh(xx, yy, dens_vis, norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+#         axs[0].set_aspect('equal', adjustable='box')
+#         axs[0].set_xlabel('x [Mpc]')
+#         axs[0].set_ylabel('y [Mpc]')
+#         axs[0].set_title('comoving density field projected along z',fontsize=20)
+
+#         # project density field to the image plane
+#         x = jnp.arange(ray_mesh_shape[0]) * ray_cell_size
+#         x -= x.mean()
+#         y = jnp.arange(ray_mesh_shape[1]) * ray_cell_size
+#         y -= y.mean()
+#         xx, yy = jnp.meshgrid(x, y, indexing="ij")
+#         xx *= 180 / jnp.pi * 60
+#         yy *= 180 / jnp.pi * 60
+#         # field of view
+#         fov = [
+#             conf.ray_grid_shape[0] * conf.ray_spacing * 180 / jnp.pi * 60,
+#             conf.ray_grid_shape[1] * conf.ray_spacing * 180 / jnp.pi * 60,
+#         ]
+#         fov_padded = [
+#             ray_mesh_shape[0] * ray_cell_size * 180 / jnp.pi * 60,
+#             ray_mesh_shape[1] * ray_cell_size * 180 / jnp.pi * 60,
+#         ]
+#         print("field of view [arcmin]:", fov[0], fov[1])
+#         print("padded field of view [arcmin]:", fov_padded[0], fov_padded[1])
+#         skip = (slice(None, None, 2), slice(None, None, 2))
+
+#         # plot
+#         dens_vis = scatter(ptcl, conf)
+#         kernel = jnp.where((z >= chi_i) & (z <= chi_f), 1, 0)
+#         kernel *= jnp.where(z > 0, 1, 0)
+#         dens_vis = jnp.einsum('xyz,z->xyz', dens_vis, kernel)
+#         dens_vis = dens_vis.reshape(-1, 1)
+#         dens_vis = project(
+#                 val_mesh3D=dens_vis,
+#                 coord3D=coord3D,
+#                 mesh2D_mesh_shape=ray_mesh_shape,
+#                 mesh2D_cell_size=ray_cell_size,
+#                 conf=conf,
+#             )
+
+#         axs[1].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+#         # quiver plot of defl_2D
+#         skip = (slice(None, None, 2), slice(None, None, 2))
+#         axs[1].quiver(
+#             xx[skip],
+#             yy[skip],
+#             defl_2D[..., 0][skip],
+#             defl_2D[..., 1][skip],
+#             color="w",
+#             scale=2e4,
+#         )
+#         axs[1].set_aspect("equal", adjustable="box")
+#         axs[1].plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
+#         axs[1].plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
+#         axs[1].plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+#         axs[1].plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+#         # axs[1].set_xlim(-fov[0] / 2, fov[0] / 2)
+#         # axs[1].set_ylim(-fov[1] / 2, fov[1] / 2)
+#         axs[1].set_xlabel('x [arcmin]')
+#         axs[1].set_ylabel('y [arcmin]')
+#         axs[1].set_title('deflection field & density angular proj',fontsize=20)
+
+#         # plot the smoothed deflection field
+#         axs[2].pcolormesh(xx, yy, dens_vis.squeeze(), norm=matplotlib.colors.LogNorm(vmin=1, vmax=2000))
+#         # quiver plot of defl_2D
+#         axs[2].quiver(
+#             xx[skip],
+#             yy[skip],
+#             defl_2D_smth[..., 0][skip],
+#             defl_2D_smth[..., 1][skip],
+#             color="w",
+#             scale=2e4,
+#         )
+#         axs[2].set_aspect("equal", adjustable="box")
+#         axs[2].plot([-fov[0] / 2, fov[0] / 2], [-fov[1] / 2, -fov[1] / 2], 'w-')
+#         axs[2].plot([-fov[0] / 2, fov[0] / 2], [fov[1] / 2, fov[1] / 2], 'w-')
+#         axs[2].plot([-fov[0] / 2, -fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+#         axs[2].plot([fov[0] / 2, fov[0] / 2], [-fov[1] / 2, fov[1] / 2], 'w-')
+#         # axs[1].set_xlim(-fov[0] / 2, fov[0] / 2)
+#         # axs[1].set_ylim(-fov[1] / 2, fov[1] / 2)
+#         axs[2].set_xlabel('x [arcmin]')
+#         axs[2].set_ylabel('y [arcmin]')
+#         axs[2].set_title('smoothed+deconv deflection field & density angular proj',fontsize=20)
+#         plt.show()
+
+#         f,axs = plt.subplots(1,2,figsize=(24,12))
+
+#         axs[0].imshow(defl_2D[...,0])
+#         axs[1].imshow(defl_2D_x)
+#         plt.show()

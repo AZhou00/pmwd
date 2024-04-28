@@ -27,7 +27,7 @@ def chi_integ(a_start, cosmo, conf):
         Omega_de = cosmo.Omega_de
         
         a = jnp.linspace(a_start, 1, 1000)
-        H_a = cosmo.h * jnp.sqrt(Omega_m * a**-3 + Omega_r * a**-4 + Omega_k * a**-2 + Omega_de)
+        H_a = jnp.sqrt(Omega_m * a**-3 + Omega_r * a**-4 + Omega_k * a**-2 + Omega_de)
         integrand = conf.c / (a**2 * H_a)
         integral = trapezoid(integrand, x=a)
         
@@ -37,49 +37,76 @@ def chi_tab(cosmo, conf):
     """Compute the comoving distances chi(a)"""
     distance_f = jit(vmap(chi_integ, in_axes=(0, None, None)))
     distance = distance_f(conf.distance_a, cosmo, conf)
-    return cosmo.replace(distance=distance)
+    return cosmo.replace(chi=distance)
+
+def r_tab(cosmo, conf):
+    """Compute the comoving distance r(a)"""  #TODO this is only flat universe
+    distance_f = jit(vmap(chi_integ, in_axes=(0, None, None)))
+    distance = distance_f(conf.distance_a, cosmo, conf)
+    return cosmo.replace(r=distance)
+
+def AD_tab(cosmo, conf):
+    """Compute the angular diameter distance r(a)"""  #TODO this is only flat universe
+    distance_f = jit(vmap(chi_integ, in_axes=(0, None, None)))
+    distance = distance_f(conf.distance_a, cosmo, conf)
+    distance *= conf.distance_a
+    return cosmo.replace(AD=distance)
 
 def chi_a(a, cosmo, conf):
     """Compute the comoving distances chi(a)"""
-    if cosmo.distance is None:
+    if cosmo.chi is None:
         raise ValueError('Distance table is empty. Call chi_tab or boltzmann first.')
     
     a = jnp.asarray(a)
     float_dtype = jnp.promote_types(a.dtype, float)
     
-    chi = jnp.interp(a, conf.distance_a, cosmo.distance)
+    chi = jnp.interp(a, conf.distance_a, cosmo.chi)
     
     return chi.astype(float_dtype)
 
 def r_a(a, cosmo, conf):
     """Compute the radial angular diameter distance r(a)"""
-    if cosmo.distance is None:
-        raise ValueError('Distance table is empty. Call chi_tab or boltzmann first.')
+    if cosmo.r is None:
+        raise ValueError('Distance table is empty. Call r_tab or boltzmann first.')
     
     a = jnp.asarray(a)
     float_dtype = jnp.promote_types(a.dtype, float)
     
-    r = jnp.interp(a, conf.distance_a, cosmo.distance)
+    r = jnp.interp(a, conf.distance_a, cosmo.r)
     
     return r.astype(float_dtype)
 
-def r_chi(chi, cosmo, conf):
-    """Compute the radial angular diameter distance r(chi)"""
-    ## TODO, do a more general interpolation
-    return chi
+def AD_a(a, cosmo, conf):
+    """Compute the angular diameter distance AD(a)"""
+    if cosmo.AD is None:
+        raise ValueError('Distance table is empty. Call AD_tab or boltzmann first.')
+    
+    a = jnp.asarray(a)
+    float_dtype = jnp.promote_types(a.dtype, float)
+    
+    AD = jnp.interp(a, conf.distance_a, cosmo.AD)
+    
+    return AD.astype(float_dtype)
 
 def a_chi(chi, cosmo, conf):
     """Compute the scale factor a(chi)"""
-    if cosmo.distance is None:
+    if cosmo.chi is None:
         raise ValueError('Distance table is empty. Call chi_tab or boltzmann first.')
 
     chi = jnp.asarray(chi)
     float_dtype = jnp.promote_types(chi.dtype, float)
 
     # need to sort xp in ascending order
-    a = jnp.interp(chi, cosmo.distance[::-1], conf.distance_a[::-1])
+    a = jnp.interp(chi, cosmo.chi[::-1], conf.distance_a[::-1])
 
     return a.astype(float_dtype)
+
+def r_chi(chi, cosmo, conf):
+    """Compute the radial angular diameter distance r(chi)"""
+    ## TODO, stable?
+    a = a_chi(chi, cosmo, conf)
+    r = r_a(a, cosmo, conf)
+    return r
 
 def growth_chi(chi, cosmo, conf, order=1, deriv=0):
     """Compute the growth function D(chi)"""
@@ -88,6 +115,7 @@ def growth_chi(chi, cosmo, conf, order=1, deriv=0):
     chi_interp = chi_a(a, cosmo, conf)
     D = jnp.interp(chi, chi_interp[::-1], D_interp[::-1])
     return D
+
 
 @jit
 def transfer_integ(cosmo, conf):
@@ -459,6 +487,7 @@ def boltzmann(cosmo, conf, transfer=True, growth=True, varlin=True, distance=Tru
 
     if distance:
         cosmo = chi_tab(cosmo, conf)
+        cosmo = r_tab(cosmo, conf)
 
     return cosmo
 

@@ -145,9 +145,9 @@ class Configuration:
 
     # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
     z_rtlim: Optional[float] = 0.2
-    chi_rtmin: Optional[float] = 100
-    mass_rescale: Optional[float] = 1
-
+    chi_rtmin: Optional[float] = 20
+    point_source_mass: Optional[float] = 1 # in unit of rho_crit * Omega_m * 1Mpc^3
+    point_source_chi_l: Optional[float] = 350 # in Mpc/h
     lpt_order: int = 2
 
     a_start: float = 1/64
@@ -376,7 +376,11 @@ class Configuration:
         """N-body time integration scale factor steps for backward ray tracing"""
         with jax.ensure_compile_time_eval():
             index = jnp.argmax(self.a_nbody[::-1]<=self.a_rtlim)
-            return self.a_nbody[::-1][:index+1]
+            result = self.a_nbody[::-1][:index+1]
+            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            return result
+            # return self.a_nbody[::-1][:index+1]
 
     # a_rtlim: float = 1 / (1 + z_rtlim)
     @property
