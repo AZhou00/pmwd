@@ -54,25 +54,56 @@ def _gather(pmid, disp, conf, mesh, val, offset, cell_size):
 
     return val
 
-# @custom_vjp #TODO: No VJP defined for custom_vjp function _scatter_rt using defvjp.
-def _gather_rt(pmid, disp, conf, mesh, val, offset, ray_cell_size, ray_mesh_shape, ):
-    ptcl_num, spatial_ndim = pmid.shape
 
+def gather_ray(disp, conf, mesh, offset, cell_size, wrap=False):
+    """Gather ray values multilinearly from a 2D ray mesh.
+
+    Parameters
+    ----------
+    disp : ArrayLike
+        Ray displacements, shape (ray_num, 2).
+    conf : Configuration
+        Configuration object.
+    mesh : ArrayLike
+        The values of the 2D mesh from which to gather, shape (mesh_shape) + (2,).
+    offset : ArrayLike, optional
+        Offset of the 2D mesh relative to the 2D ray mesh.
+    cell_size : float, optional
+        Ray mesh cell size.
+    wrap : bool, optional
+        Whether to use periodic boundary conditions.
+
+    Returns
+    -------
+    val : jax.Array
+        Output values.
+    """
+    assert conf.ray_num == disp.shape[0]
+    if wrap:
+        mesh_shape = mesh.shape[0:2]
+    else:
+        mesh_shape = None
+    pmid = jnp.zeros((conf.ray_num, 2)).astype(conf.pmid_dtype)
     mesh = jnp.asarray(mesh, dtype=conf.float_dtype)
+    offset = jnp.asarray(offset, dtype=conf.float_dtype)
+    val = jnp.zeros((conf.ray_num, 2)).astype(conf.float_dtype)
+    return _gather_ray(pmid, disp, conf, mesh, val, offset, cell_size, mesh_shape)
 
-    val = jnp.asarray(val, dtype=conf.float_dtype)
 
+def _gather_ray(pmid, disp, conf, mesh, val, offset, cell_size, mesh_shape, ):
+    ptcl_num, spatial_ndim = pmid.shape
+    # the dimensionality of the mesh values (scalar or vector) should match
     if mesh.shape[spatial_ndim:] != val.shape[1:]:
         raise ValueError('channel shape mismatch: '
                          f'{mesh.shape[spatial_ndim:]} != {val.shape[1:]}')
 
-    remainder, chunks = _chunk_split(ptcl_num, None, pmid, disp, val) # conf.chunk_size -> None
+    remainder, chunks = _chunk_split(ptcl_num, conf.chunk_size, pmid, disp, val)
 
-    carry = conf, mesh, offset, ray_cell_size, ray_mesh_shape, 
+    carry = mesh, offset, cell_size, mesh_shape, 
     val_0 = None
     if remainder is not None:
-        val_0 = _gather_chunk_rt(carry, remainder)[1]
-    val = scan(_gather_chunk_rt, carry, chunks)[1]
+        val_0 = _gather_chunk_ray(carry, remainder)[1]
+    val = scan(_gather_chunk_ray, carry, chunks)[1]
 
     val = _chunk_cat(val_0, val)
 
@@ -100,8 +131,9 @@ def _gather_chunk(carry, chunk):
 
     return carry, val
 
-def _gather_chunk_rt(carry, chunk):
-    conf, mesh, offset, ray_cell_size, ray_mesh_shape = carry
+
+def _gather_chunk_ray(carry, chunk):
+    mesh, offset, cell_size, mesh_shape = carry
     pmid, disp, val = chunk
 
     spatial_ndim = pmid.shape[1]
@@ -111,8 +143,8 @@ def _gather_chunk_rt(carry, chunk):
     chan_axis = tuple(range(-chan_ndim, 0))
 
     # multilinear mesh indices and fractions
-    ind, frac = enmesh(pmid, disp, ray_cell_size, ray_mesh_shape,
-                       offset, ray_cell_size, spatial_shape, False)
+    ind, frac = enmesh(pmid, disp, cell_size, mesh_shape,
+                       offset, cell_size, spatial_shape, False)
 
     # gather
     ind = tuple(ind[..., i] for i in range(spatial_ndim))
@@ -120,6 +152,7 @@ def _gather_chunk_rt(carry, chunk):
     val += (mesh.at[ind].get(mode='drop', fill_value=0) * frac).sum(axis=1)
 
     return carry, val
+
 
 def _gather_chunk_adj(carry, chunk):
     """Adjoint of `_gather_chunk`, or equivalently `_gather_adj_chunk`, i.e.

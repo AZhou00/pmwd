@@ -65,7 +65,12 @@ def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf):
     # print('------------------')
     D = K = 0
     a_disp = a_vel = a_prev
-
+    
+    # potential for the ray evaluated at half step
+    # a dependency only affects SO
+    grad_phi3D = grad_phi((a_prev+a_next)/2, ptcl, cosmo, conf)
+    
+    # KDK
     for d, k in conf.symp_splits:
         if d != 0:
             D += d
@@ -77,7 +82,6 @@ def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf):
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
             a_c = (a_vel + a_vel_next) / 2
-            grad_phi3D = grad_phi(a_c, ptcl, cosmo, conf)
             ray = force_ray(a_vel, a_vel_next, a_c, ptcl, ray, grad_phi3D, cosmo, conf)
             ray = kick_ray(ray)
             a_vel = a_vel_next
