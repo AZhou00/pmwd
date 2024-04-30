@@ -146,7 +146,7 @@ class Rays:
         # print(A.shape) # (ray_num, 2, 2)
         return cls(conf, pmid, disp, eta=eta, deta=deta, A=A, B=B, dB=dB)
 
-    def pos_0(self, dtype=jnp.float32):
+    def pos_0(self, dtype=jnp.float64):
         """Ray positions on the 2d image plane at z=0.
 
         Parameters
@@ -168,7 +168,7 @@ class Rays:
         pos *= self.conf.ray_cell_size_default
         return pos
     
-    def pos_ip(self, dtype=jnp.float32): 
+    def pos_ip(self, dtype=jnp.float64): 
         #TODO: ask why jnp.64, ok probably becasue we are merging pmid and disp
         #TODO: maybe 32 for ray tracing is good enough. is this a major issue?
         """Ray positions on the 2d image plane angular 
@@ -194,7 +194,7 @@ class Rays:
         pos += self.disp.astype(dtype) # disp in [rad]
         return pos
     
-    def pos_3d(self, a, cosmo, conf, dtype=jnp.float32, wrap=True):
+    def pos_3d(self, a, cosmo, conf, dtype=jnp.float64, wrap=True):
         """Ray 3d comoving positions, at the a=a slice.
 
         Parameters

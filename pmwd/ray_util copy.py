@@ -19,24 +19,142 @@ def deflection_pointsources(theta, ms, M, chi_s, chi_l, conf):
     theta = jnp.array(theta) * arcmin_to_rad
     ms = jnp.array(ms)
 
-    
     # Initialize deflection to zero
     alpha = jnp.zeros_like(theta)
     
     # Compute gravitational deflection for each point mass
     for m in ms:
-        b = theta * chi_l
-        v = b-m
-        v_norm = jnp.linalg.norm(v, axis=-1)[..., None]
-        
-        alpha_hat = 4 * G * M / (c**2 * v_norm) * (v / v_norm)
-        scaled_alpha = (chi_s - chi_l) / (chi_s) * alpha_hat
+        dtheta = theta - (m / chi_l) * arcmin_to_rad  # Convert m from Mpc/h to radians via chi_l and to arcmin
+        dist = jnp.linalg.norm(dtheta, axis=-1, keepdims=True)
+        alpha_hat = 4 * G * M / (c**2 * dist) * dtheta
+        scaled_alpha = (chi_s - chi_l) / (chi_s * chi_l) * alpha_hat
         alpha += scaled_alpha
 
     # Convert deflection from radians back to arcminutes
     alpha_in_arcmin = alpha / arcmin_to_rad
     return alpha_in_arcmin
 
+# # Helper function to convert angles
+# def convert_angle(angle, from_unit, to_unit):
+#     if from_unit == to_unit:
+#         return angle
+#     unit_conversion = {
+#         'arcmin': 1,
+#         'radian': np.pi / 180 / 60,
+#         'degree': 1 / 60,
+#     }
+#     return angle * unit_conversion[from_unit] / unit_conversion[to_unit]
+
+# # @jit
+# def deflection_pointsources(theta, ms, M, chi_s, chi_l, conf, input_unit='arcmin', output_unit='arcmin'):
+#     G = conf.G
+#     c = conf.c
+    
+#     # Convert theta from input units to radians for internal calculation
+#     theta = jnp.array(theta)
+#     theta = convert_angle(theta, from_unit=input_unit, to_unit='radian')
+#     ms = jnp.array(ms)
+
+#     # Compute gravitational deflection
+#     alpha = jnp.zeros_like(theta)
+#     for m in ms:
+#         dtheta = theta - m / chi_l
+#         dist = jnp.linalg.norm(dtheta, axis=-1, keepdims=True)
+#         alpha_hat = 4 * G * M / (c**2 * dist) * dtheta
+#         scaled_alpha = (chi_s - chi_l) / (chi_s * chi_l) * alpha_hat
+#         alpha += scaled_alpha
+
+#     # Convert deflection from radians to output units
+#     alpha = convert_angle(alpha, from_unit='radian', to_unit=output_unit)
+#     return alpha
+
+
+
+
+def point_mass_deflection(theta0, chi_l, chi_s, M, conf, unit = 'arcmin'):
+    """
+    Deflection angle for point mass for flat universe to second order in mass.
+    
+    Parameters
+    ----------
+    theta0 : float
+        Initial position of the ray, shape = [ray_num, 2], in radian
+    chi_l : float
+        Comoving distance to lens, shape = () or [ray_num], in Mpc
+    chi_s : float
+        Comoving distance to source, shape = () or [ray_num], in Mpc
+    M : float
+        Mass of the lens, shape = () or [ray_num], in M
+    unit: str
+        unit of the output, 'arcmin' or 'radian'
+    Returns
+    -------
+    theta_s : float
+        Final position of the ray, shape = [ray_num, 2], in radians.
+    """
+    # jnp.abs(theta0,axis=-1) # has shape [ray_num]/
+    chi_ls = chi_s - chi_l
+    theta0_mag = jnp.linalg.norm(theta0,axis=1)[:,None]
+
+    b = jnp.sin(theta0_mag) * chi_l
+    factor = conf.G * M / (conf.c ** 2) / b
+    alpha_hat = 4 * factor + 15/4 * jnp.pi * factor**2
+    alpha = (chi_ls / chi_s) * alpha_hat * (theta0 / theta0_mag)    
+    
+    theta_s = theta0 - alpha
+    if unit == 'arcmin':
+        theta_s *= 180*60/jnp.pi
+        alpha *= 180*60/jnp.pi
+        
+    return theta_s, - alpha
+
+def point_mass_deflection_periodic_bc(theta0, chi_l, chi_s, M, conf, unit = 'arcmin'):
+    Lx, Ly = conf.box_size[0], conf.box_size[1]
+    # the lensing mass and all the images of the lensing mass
+    ms = jnp.array([
+        # [0, 0],
+        [Lx, 0],
+        # [-Lx, 0],
+        [0, Ly],
+        # [0, -Ly],
+        [Lx, Ly],
+        # [Lx, -Ly],
+        [-Lx, Ly],
+        # [-Lx, -Ly],        
+    ])
+    alpha = jnp.zeros_like(theta0)
+    
+    # impact parameter of the photons
+    for m in ms:
+        b = theta0 * chi_l - m
+        b_mag = jnp.linalg.norm(b, axis=-1)[...,None]
+        alpha += (1 / b_mag) * (b / b_mag)
+
+    alpha *= ((chi_s - chi_l) / chi_s) * (4 * conf.G * M / (conf.c ** 2))
+    theta_s = theta0 - alpha
+    
+    if unit == 'arcmin':
+        theta_s *= 180*60/jnp.pi
+        alpha *= 180*60/jnp.pi
+
+    # 2
+    # # impact parameter of the photons
+    # b = theta0 * chi_l
+    # # print('b',b[:1])
+    # # print('b-m',b[:1] - ms[1])
+    # alpha = jnp.zeros_like(theta0)
+    # for m in ms:
+    #     alpha += (b - m) / jnp.linalg.norm(b - m, axis=-1)[...,None] ** 2
+    # chi_ls = chi_s - chi_l
+    # alpha *= (chi_ls / chi_s) * (4 * conf.G * M / (conf.c ** 2))
+    
+    # theta_s = theta0 - alpha
+    # if unit == 'arcmin':
+    #     theta_s *= 180*60/jnp.pi
+    #     alpha *= 180*60/jnp.pi
+    
+        
+    return theta_s, - alpha
 
 def visual_ray_point_mass(theta0, theta_prev, theta_s, chi_l, chi_s_prev, chi_s, M, conf, ptcl):
     """

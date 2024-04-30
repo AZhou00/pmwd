@@ -122,9 +122,9 @@ def compute_ray_mesh(r_l, r_u, conf):
     p_x = conf.ray_mesh_p_x
     p_y = conf.ray_mesh_p_y
     if p_x == 0:
-        p_x = 50
+        p_x = 5
     if p_y == 0:
-        p_y = 50
+        p_y = 5
 
     return _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota, dtype=conf.float_dtype)
 

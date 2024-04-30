@@ -132,7 +132,7 @@ def nbody_ray_step(a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf):
     return ray, obsvbl_ray
 
 
-def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
+def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True):
     """
     N-body time integration with ray tracing updates.
     ray tracing nbody integration goes backward by default
@@ -140,9 +140,8 @@ def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
     # a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
     a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
 
-    if not static:
-        # initialize the acceleration to ptcl does not do anything else.
-        ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
+    # initialize the acceleration to ptcl does not do anything else.
+    ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
     # does nothing right now
     ray, obsvbl_ray = nbody_ray_init(a_nbody[0], ray, obsvbl_ray, cosmo, conf)
 
@@ -150,8 +149,7 @@ def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
         ray, obsvbl_ray = nbody_ray_step(
             a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf
         )
-        if not static:
-            ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
+        ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
     
     return ptcl, ray, obsvbl, obsvbl_ray
 
@@ -259,137 +257,120 @@ def nbody_ray_vis(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True, fold
     return ptcl, ray, obsvbl, obsvbl_ray
 
 
-# def nbody_ray_point_mass(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True):
-#     """
-#     point mass lensing test
-#     all point mass is placed at the center of the box ~ 400Mpc/h, and source plane at the end of the box
-#         chi_l = conf.box_size[-1]/2 #Mpc/h
-#         chi_s = conf.box_size[-1] #Mpc/h, approx. chi_a(conf.a_nbody_ray[-1], cosmo, conf)
-#     """
-#     from pmwd.ray_util import deflection_pointsources
-#     a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
-#     ray, obsvbl_ray = nbody_ray_init(a_nbody[0], ray, obsvbl_ray, cosmo, conf)
+def nbody_ray_point_mass(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True):
+    """
+    point mass lensing test
+    all point mass is placed at the center of the box ~ 400Mpc/h, and source plane at the end of the box
+        chi_l = conf.box_size[-1]/2 #Mpc/h
+        chi_s = conf.box_size[-1] #Mpc/h, approx. chi_a(conf.a_nbody_ray[-1], cosmo, conf)
+    """
+    from pmwd.ray_util import point_mass_deflection, point_mass_deflection_periodic_bc, deflection_pointsources
+    a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
+    ray, obsvbl_ray = nbody_ray_init(a_nbody[0], ray, obsvbl_ray, cosmo, conf)
 
-#     for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
-#         ray, obsvbl_ray = nbody_ray_step(
-#             a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf
-#         )
-#     return ptcl, ray, obsvbl, obsvbl_ray, data
+    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
+        ray, obsvbl_ray = nbody_ray_step(
+            a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf
+        )
+        chi_l = conf.point_source_chi_l #Mpc/h 
+        chi_s = chi_a(a_next, cosmo, conf)
+        M = cosmo.conf.rho_crit * cosmo.Omega_m * (1)**3 * conf.point_source_mass # point_source_mass in unit of rho_crit * Omega_m * 1Mpc^3
+        # cosmo.conf.rho_crit * cosmo.Omega_m * 1e4 * 4 * 1.665**3 #1e4 * 8 * 8 * 4 #cosmo.ptcl_mass * conf.ptcl_num * conf.mass_rescale# / 1.414
+        # print('mass', M)
+        if chi_s > conf.box_size[-1]*2/3:
+            # initial position
+            theta_0 = ray.pos_0() * 3437.75 #arcmin
 
-#         chi_l = conf.point_source_chi_l #Mpc/h 
-#         chi_s = chi_a(a_next, cosmo, conf)
-#         M = cosmo.conf.rho_crit * cosmo.Omega_m * (1)**3 * conf.point_source_mass # point_source_mass in unit of rho_crit * Omega_m * 1Mpc^3
-#         # cosmo.conf.rho_crit * cosmo.Omega_m * 1e4 * 4 * 1.665**3 #1e4 * 8 * 8 * 4 #cosmo.ptcl_mass * conf.ptcl_num * conf.mass_rescale# / 1.414
-#         # print('mass', M)
-#         if chi_s > conf.box_size[-1]*19/20:
-#             # initial position
-#             theta_0 = ray.pos_0() * 3437.75 #arcmin
-            
-#             # theory lensing
-#             Lx, Ly  = conf.box_size[0], conf.box_size[1]
+            # theory lensing
+            theta_E = jnp.sqrt((chi_s-chi_l) / (chi_s) / chi_l * 4 * conf.G * M / conf.c**2) * 3437.75
+            # theta_theory, _ = point_mass_deflection(theta_0/3437.75, chi_l, chi_s, M, conf, unit='arcmin') #output in arcmin
+            # print(theta_theory[0], 'theory theta')
+            # print(_[0], 'theory')
+            # theta_theory, _ = point_mass_deflection_periodic_bc(theta_0/3437.75, chi_l, chi_s, M, conf, unit='arcmin') #output in arcmin
+            Lx, Ly = Lx, Ly = conf.box_size[0], conf.box_size[1]
+            ms = jnp.array(
+                [
+                    [0, 0],
+                    [Lx, 0],
+                    [-Lx, 0],
+                    [0, Ly],
+                    [0, -Ly],
+                    [Lx, Ly],
+                    [Lx, -Ly],
+                    [-Lx, Ly],
+                    [-Lx, -Ly],
+                ]
+            )
+            theta_theory = theta_0 - deflection_pointsources(theta_0, ms, M, chi_s, chi_l, conf)
+            # print(theta_theory[0], 'theory_periodic')
+            # print(theta_s[0], 'HRT')
+            # print(_[0], 'theory_periodic')
 
-#             ms = jnp.array([[0, 0]])
-#             theta_theory = theta_0 - deflection_pointsources(theta_0, ms, M, chi_s, chi_l, conf)
-#             print(theta_theory[0], 'theory')
-            
-#             ms = jnp.array(
-#                 [
-#                     [0, 0],
-#                     # ring 1
-#                     [Lx, 0],
-#                     [-Lx, 0],
-#                     [0, Ly],
-#                     [0, -Ly],
-#                     [Lx, Ly],
-#                     [Lx, -Ly],
-#                     [-Lx, Ly],
-#                     [-Lx, -Ly],
-#                     # ring 2
-#                     [-2*Lx, 2*Ly],
-#                     [-Lx, 2*Ly],
-#                     [0, 2*Ly],
-#                     [Lx, 2*Ly],
-#                     [2*Lx, 2*Ly],
-#                     [2*Lx, Ly],
-#                     [2*Lx, 0],
-#                     [2*Lx, -Ly],
-#                     [2*Lx, -2*Ly],
-#                     [Lx, -2*Ly],
-#                     [0, -2*Ly],
-#                     [-Lx, -2*Ly],
-#                     [-2*Lx, -2*Ly],
-#                     [-2*Lx, -Ly],
-#                     [-2*Lx, 0],
-#                     [-2*Lx, Ly],
-    
-#                 ]
-#             )
-#             theta_theory = theta_0 - deflection_pointsources(theta_0, ms, M, chi_s, chi_l, conf)
-#             print(theta_theory[0], 'theory_periodic')
+            # HRT lensing
+            theta_s = ray.pos_ip() * 3437.75 #arcmin
+            # apply Einstein radius mask
+            scale = 4
+            mask = jnp.linalg.norm(theta_theory, axis=-1) > theta_E * scale
+            mask = mask & (jnp.linalg.norm(theta_s, axis=-1) > theta_E * scale)
+            mask = mask & (jnp.linalg.norm(theta_0, axis=-1) > theta_E * scale)
+            theta_0 = theta_0[mask]
+            theta_theory = theta_theory[mask]
+            theta_s = theta_s[mask]
+            data = (theta_0, theta_theory, theta_s, theta_E)
 
-#             # HRT lensing
-#             theta_s = ray.pos_ip() * 3437.75 #arcmin
-            
-#             # apply Einstein radius mask
-#             scale = 4
-#             theta_E = jnp.sqrt((chi_s-chi_l) / (chi_s) / chi_l * 4 * conf.G * M / conf.c**2) * 3437.75
-#             mask = jnp.linalg.norm(theta_theory, axis=-1) > theta_E * scale
-#             mask = mask & (jnp.linalg.norm(theta_s, axis=-1) > theta_E * scale)
-#             mask = mask & (jnp.linalg.norm(theta_0, axis=-1) > theta_E * scale)
-#             theta_0 = theta_0[mask]
-#             theta_theory = theta_theory[mask]
-#             theta_s = theta_s[mask]
-#             data = (theta_0, theta_theory, theta_s, theta_E)
-#             print(theta_s[0], 'HRT')
+            print(theta_theory[0], 'theory_periodic')
+            print(theta_s[0], 'HRT')
 
-#             # print(chi_s)
-#             # f,axs = plt.subplots(1,2,figsize=(12,6))
-#             # def plot_ip_alpha_theory(ax, theta_0, theta_theory, theta_s, theta_E, limit=100, **kwargs):
-#             #     error_x = (theta_s[:,0] - theta_theory[:,0])
-#             #     error_y = (theta_s[:,1] - theta_theory[:,1])
+            # print(chi_s)
+            # f,axs = plt.subplots(1,2,figsize=(12,6))
+            # def plot_ip_alpha_theory(ax, theta_0, theta_theory, theta_s, theta_E, limit=100, **kwargs):
+            #     error_x = (theta_s[:,0] - theta_theory[:,0])
+            #     error_y = (theta_s[:,1] - theta_theory[:,1])
 
-#             #     alpha_theory = theta_theory - theta_0
-#             #     alpha_theory = jnp.linalg.norm(alpha_theory, axis=-1)
+            #     alpha_theory = theta_theory - theta_0
+            #     alpha_theory = jnp.linalg.norm(alpha_theory, axis=-1)
 
-#             #     alpha_s = theta_s - theta_0
-#             #     alpha_s = jnp.linalg.norm(alpha_s, axis=-1)
+            #     alpha_s = theta_s - theta_0
+            #     alpha_s = jnp.linalg.norm(alpha_s, axis=-1)
 
-#             #     error_rel = (alpha_s - alpha_theory) / alpha_theory
+            #     error_rel = (alpha_s - alpha_theory) / alpha_theory
 
-#             #     error_plot = (theta_theory - theta_0)[:,0]
+            #     error_plot = (theta_theory - theta_0)[:,0]
 
-#             #     ax.add_patch(plt.Circle((0,0), theta_E, fill=False, color='k', linewidth=1))
-#             #     c = ax.scatter(theta_0[:,0], theta_0[:,1], c=error_plot, s=2, cmap='coolwarm', **kwargs)#,vmin=-0.05,vmax=0.05
-#             #     plt.colorbar(c, ax=ax)
-#             #     ax.set_xlim(-limit,limit)
-#             #     ax.set_ylim(-limit,limit)
-#             #     ax.set_xlabel(r'$\theta_x$ [arcmin]')
-#             #     ax.set_ylabel(r'$\theta_y$ [arcmin]')
-#             #     ax.set_aspect('equal')
-#             #     ax.set_title(r'$\alpha_{theory,x}$')
-#             #     return
-#             # def plot_ip_alpha_s(ax, theta_0, theta_theory, theta_s, theta_E, limit=100, **kwargs):
-#             #     error_x = (theta_s[:,0] - theta_theory[:,0])
-#             #     error_y = (theta_s[:,1] - theta_theory[:,1])
+            #     ax.add_patch(plt.Circle((0,0), theta_E, fill=False, color='k', linewidth=1))
+            #     c = ax.scatter(theta_0[:,0], theta_0[:,1], c=error_plot, s=2, cmap='coolwarm', **kwargs)#,vmin=-0.05,vmax=0.05
+            #     plt.colorbar(c, ax=ax)
+            #     ax.set_xlim(-limit,limit)
+            #     ax.set_ylim(-limit,limit)
+            #     ax.set_xlabel(r'$\theta_x$ [arcmin]')
+            #     ax.set_ylabel(r'$\theta_y$ [arcmin]')
+            #     ax.set_aspect('equal')
+            #     ax.set_title(r'$\alpha_{theory,x}$')
+            #     return
+            # def plot_ip_alpha_s(ax, theta_0, theta_theory, theta_s, theta_E, limit=100, **kwargs):
+            #     error_x = (theta_s[:,0] - theta_theory[:,0])
+            #     error_y = (theta_s[:,1] - theta_theory[:,1])
 
-#             #     alpha_theory = theta_theory - theta_0
-#             #     alpha_theory = jnp.linalg.norm(alpha_theory, axis=-1)
+            #     alpha_theory = theta_theory - theta_0
+            #     alpha_theory = jnp.linalg.norm(alpha_theory, axis=-1)
 
-#             #     alpha_s = theta_s - theta_0
-#             #     alpha_s = jnp.linalg.norm(alpha_s, axis=-1)
+            #     alpha_s = theta_s - theta_0
+            #     alpha_s = jnp.linalg.norm(alpha_s, axis=-1)
 
-#             #     error_plot = (theta_s - theta_0)[:,0]
+            #     error_plot = (theta_s - theta_0)[:,0]
 
-#             #     ax.add_patch(plt.Circle((0,0), theta_E, fill=False, color='k', linewidth=1))
-#             #     c = ax.scatter(theta_0[:,0], theta_0[:,1], c=error_plot, s=2, cmap='coolwarm', **kwargs)#,vmin=-0.05,vmax=0.05
-#             #     plt.colorbar(c, ax=ax)
-#             #     ax.set_xlim(-limit,limit)
-#             #     ax.set_ylim(-limit,limit)
-#             #     ax.set_xlabel(r'$\theta_x$ [arcmin]')
-#             #     ax.set_ylabel(r'$\theta_y$ [arcmin]')
-#             #     ax.set_aspect('equal')
-#             #     ax.set_title(r'$\alpha_{HRT,x}$')
-#             #     return
-#             # plot_ip_alpha_theory(axs[0], *data, limit=100,vmin=-8,vmax=8)
-#             # plot_ip_alpha_s(axs[1], *data, limit=100,vmin=-8,vmax=8)
-#             plt.show()
+            #     ax.add_patch(plt.Circle((0,0), theta_E, fill=False, color='k', linewidth=1))
+            #     c = ax.scatter(theta_0[:,0], theta_0[:,1], c=error_plot, s=2, cmap='coolwarm', **kwargs)#,vmin=-0.05,vmax=0.05
+            #     plt.colorbar(c, ax=ax)
+            #     ax.set_xlim(-limit,limit)
+            #     ax.set_ylim(-limit,limit)
+            #     ax.set_xlabel(r'$\theta_x$ [arcmin]')
+            #     ax.set_ylabel(r'$\theta_y$ [arcmin]')
+            #     ax.set_aspect('equal')
+            #     ax.set_title(r'$\alpha_{HRT,x}$')
+            #     return
+            # plot_ip_alpha_theory(axs[0], *data, limit=100,vmin=-8,vmax=8)
+            # plot_ip_alpha_s(axs[1], *data, limit=100,vmin=-8,vmax=8)
+            plt.show()
+
+    return ptcl, ray, obsvbl, obsvbl_ray, data

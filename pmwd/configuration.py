@@ -106,15 +106,15 @@ class Configuration:
     ray_spacing: float
     ray_grid_shape: Tuple[int, ...]
     ray_mesh_iota: float = 1
-    ray_mesh_p_x: int = 0
-    ray_mesh_p_y: int = 0
+    ray_mesh_p_x: int = 100
+    ray_mesh_p_y: int = 100
 
     mesh_shape: Union[float, Tuple[int, ...]] = 1
     ray_mesh_shape_default: Union[float, Tuple[int, ...]] = 1
 
     cosmo_dtype: DTypeLike = jnp.float64
-    pmid_dtype: DTypeLike = jnp.int16
-    float_dtype: DTypeLike = jnp.float32
+    pmid_dtype: DTypeLike = jnp.int32
+    float_dtype: DTypeLike = jnp.float64
 
     k_pivot_Mpc: float = 0.05
 
@@ -372,6 +372,11 @@ class Configuration:
                             dtype=self.cosmo_dtype)
 
     @property
+    def a_rtlim(self):
+        """Scale factor of the furthest source redshift."""
+        return 1 / (1 + self.z_rtlim)
+    
+    @property
     def a_nbody_ray(self):
         """N-body time integration scale factor steps for backward ray tracing"""
         with jax.ensure_compile_time_eval():
@@ -379,14 +384,9 @@ class Configuration:
             result = self.a_nbody[::-1][:index+1]
             result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
             result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
             return result
             # return self.a_nbody[::-1][:index+1]
-
-    # a_rtlim: float = 1 / (1 + z_rtlim)
-    @property
-    def a_rtlim(self):
-        """Scale factor of the furthest source redshift."""
-        return 1 / (1 + self.z_rtlim)
 
     @property
     def growth_a(self):
