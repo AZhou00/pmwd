@@ -105,9 +105,9 @@ class Configuration:
 
     ray_spacing: float
     ray_grid_shape: Tuple[int, ...]
-    ray_mesh_iota: float = 1
-    ray_mesh_p_x: int = 100
-    ray_mesh_p_y: int = 100
+    ray_mesh_iota: float = 0.5
+    ray_mesh_p_x: int = 256
+    ray_mesh_p_y: int = 256
 
     mesh_shape: Union[float, Tuple[int, ...]] = 1
     ray_mesh_shape_default: Union[float, Tuple[int, ...]] = 1
@@ -382,8 +382,8 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             index = jnp.argmax(self.a_nbody[::-1]<=self.a_rtlim)
             result = self.a_nbody[::-1][:index+1]
-            # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
-            # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
             # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
             return result
             # return self.a_nbody[::-1][:index+1]

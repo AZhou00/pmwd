@@ -58,7 +58,7 @@ def grad_phi(a, ptcl, cosmo, conf):
     """
     # length 3 tuple, ith has shape (mesh_shape[i], 1, 1)
     kvec_ptc = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # unit of [1/Mpc]
-    print('kvec_ptc.dtype', kvec_ptc[0].dtype)
+    # print('kvec_ptc.dtype', kvec_ptc[0].dtype)
     # RHS of Poisson's equation
     
     # if point source mass ------------------
@@ -172,7 +172,6 @@ def project(
     coord2D = coord3D[:, 0:2].astype(conf.float_dtype)
 
     # divide the first two coordinates by the radial comoving distance
-    # should not use np.where and set coordr=0 entry to 0, because we need to remove these values
     coord2D /= (coordr + 1e-5)[:, jnp.newaxis]  # shape (N_x * N_y * N_z, 2)
 
     val_mesh2D = scatter_ray(
@@ -199,11 +198,13 @@ def mesh3D_coord(chi_i, chi_f, cosmo, conf):
     n_i = chi_i // b
     n_f = chi_f // b
 
+    
     x = jnp.arange(conf.mesh_shape[0]).astype(conf.float_dtype) * conf.cell_size
     y = jnp.arange(conf.mesh_shape[1]).astype(conf.float_dtype) * conf.cell_size
-    print('x min and max', x.min(), x.max())
-    print('y min and max', y.min(), y.max())
-    print(conf.box_size, "box_size")
+    # print('x min and max', x.min(), x.max())
+    # print('y min and max', y.min(), y.max())
+    # print(conf.box_size, "box_size")
+    
     # # x and y shift based on n_i
     # x += n_i * (2/7) * conf.box_size[0]
     # y += n_i * (2/7) * conf.box_size[1]
@@ -211,26 +212,18 @@ def mesh3D_coord(chi_i, chi_f, cosmo, conf):
     # x = x % conf.box_size[0]
     # y = y % conf.box_size[1]
 
-    # x, y = x - (conf.box_size[0]) / 2, y - (conf.box_size[1]) / 2
-    print((x - (conf.box_size[0]) / 2)[0:10],'old x[0:10]')
     x, y = x - x.mean(), y - y.mean()
-    print(x[0:10], "x[0:10]")
-    print(x.mean(), y.mean(), "x.mean(), y.mean()")
-    
     z = jnp.arange(conf.mesh_shape[2], dtype=conf.float_dtype) * conf.cell_size
     # z += n_i * b
     # z_next_box = z + (n_f - n_i) * b
     # z = jnp.where(z_next_box <= chi_f, z_next_box, z).astype(conf.float_dtype)
     r = r_chi(z, cosmo, conf).astype(conf.float_dtype)
-    print(r.dtype, "r.dtype")
-    print(x.dtype, "x.dtype")
     # tuple of 3, each has shape (N_x, N_y, N_z)
     coord3D = jnp.meshgrid(*[x, y, r], indexing="ij")
     # shape (N_x, N_y, N_z, 3)
     coord3D = jnp.stack(coord3D, axis=-1)
     # shape (N_x * N_y * N_z, 3)
     coord3D = coord3D.reshape(-1, conf.dim)
-    print(coord3D.dtype, "coord3D.dtype")
     return coord3D, z, r
 
 
@@ -297,18 +290,13 @@ def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_sh
     # deconv gathering
     defl_2D_fft_x = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_x)
     defl_2D_fft_y = deconv_tophat(kvec_ray, ray_cell_size, defl_2D_fft_y)
-    # smooth with smoothing_tophat smoothing_gaussian
-    smoothing_width = jnp.max(jnp.array([conf.cell_size / r_c, conf.ray_spacing])).astype(conf.float_dtype)
-    # lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
+    # smoothing
+    smoothing_width = ray_cell_size/conf.ray_mesh_iota
     defl_2D_fft_x = smoothing_gaussian(kvec_ray, smoothing_width, defl_2D_fft_x)
     defl_2D_fft_y = smoothing_gaussian(kvec_ray, smoothing_width, defl_2D_fft_y)
-    # defl_2D_fft_x = smoothing_tophat(kvec_ray, smoothing_width, defl_2D_fft_x)
-    # defl_2D_fft_y = smoothing_tophat(kvec_ray, smoothing_width, defl_2D_fft_y)
     defl_2D_x = fftinv(defl_2D_fft_x, shape=ray_mesh_shape)
     defl_2D_y = fftinv(defl_2D_fft_y, shape=ray_mesh_shape)
     defl_2D_smth = jnp.stack([defl_2D_x, defl_2D_y], axis=-1)
-    # if chi_i >2200:
-    # visual_density_defl2D(ptcl, defl_2D_smth, coord3D, conf, z, chi_i, chi_f, ray_mesh_shape, ray_cell_size)
     return defl_2D_smth
 
 def gather_eta(ray_pos_ip, ray_pmid, defl_2D_smth, ray_cell_size, conf):
