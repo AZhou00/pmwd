@@ -12,6 +12,7 @@ def laplace(kvec, src, cosmo=None):
     k2 = sum(k**2 for k in kvec)
 
     pot = jnp.where(k2 != 0, -src / k2, 0)
+    # pot = jnp.where(k2 >= 1e-3, -src / k2, 0)
 
     return pot
 

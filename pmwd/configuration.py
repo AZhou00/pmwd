@@ -113,7 +113,7 @@ class Configuration:
     ray_mesh_shape_default: Union[float, Tuple[int, ...]] = 1
 
     cosmo_dtype: DTypeLike = jnp.float64
-    pmid_dtype: DTypeLike = jnp.int32
+    pmid_dtype: DTypeLike = jnp.int16 
     float_dtype: DTypeLike = jnp.float64
 
     k_pivot_Mpc: float = 0.05
@@ -382,8 +382,8 @@ class Configuration:
         with jax.ensure_compile_time_eval():
             index = jnp.argmax(self.a_nbody[::-1]<=self.a_rtlim)
             result = self.a_nbody[::-1][:index+1]
-            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
-            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
+            # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
             # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
             return result
             # return self.a_nbody[::-1][:index+1]

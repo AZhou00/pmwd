@@ -254,6 +254,22 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
     ax.grid(which='both')
     plt.show()
 
+def lens_plane_nonperiodic(lens_thickness, dens, conf, chi_i, chi_f, ray_mesh_shape, ray_cell_size, cosmo):
+    coord3D, z, r = mesh3D_coord(chi_i, chi_f, cosmo, conf)
+    kernel = jnp.where((z >= chi_i) & (z <= chi_f), 1.0, 0.0)
+    kernel *= jnp.where(z > 0, 1.0, 0.0)
+    dens_vis = jnp.einsum('xyz,z->xyz', dens, kernel)
+    dens_vis = dens_vis.reshape(-1, 1)
+    lens_mesh2D = project(
+            val_mesh3D=dens_vis,
+            coord3D=coord3D,
+            mesh2D_mesh_shape=ray_mesh_shape,
+            mesh2D_cell_size=ray_cell_size,
+            conf=conf,
+        )
+    return lens_mesh2D[...,0]
+    # return dens_vis.sum(axis=2)
+
 def lens_plane(lens_thickness, dens, conf, chi_i, chi_f, ray_mesh_shape, ray_cell_size, cosmo):
     # dens is a Nx, Ny, Nz array of density field, with periodic boundary condition
     # z has shape Nz labels the comoving distance chi value in z direction

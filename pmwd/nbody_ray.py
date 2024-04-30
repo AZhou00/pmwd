@@ -8,7 +8,7 @@ from pmwd.ray_mesh import compute_ray_mesh
 from pmwd.boltzmann import growth, chi_a, r_a
 from pmwd.lensing import grad_phi, lensing
 from pmwd.nbody import nbody_init, nbody_step
-from pmwd.ray_util import visual_ray_point_mass, lens_plane
+from pmwd.ray_util import visual_ray_point_mass, lens_plane, lens_plane_nonperiodic
 import matplotlib.pyplot as plt
 
 
@@ -137,6 +137,9 @@ def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
     N-body time integration with ray tracing updates.
     ray tracing nbody integration goes backward by default
     """
+    from pmwd.gravity import laplace
+    from pmwd.pm_util import fftfreq, fftfwd, fftinv
+
     # a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
     a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
 
@@ -150,6 +153,36 @@ def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
         ray, obsvbl_ray = nbody_ray_step(
             a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf
         )
+        
+        # compute potential field
+        val = jnp.zeros(conf.ptcl_num, dtype=conf.float_dtype)
+        val = val.at[0].set(conf.point_source_mass)
+        val /= conf.ptcl_cell_vol # point_source_mass in unit of rho_crit * Omega_m * 1Mpc^3
+        val *= conf.mesh_size / conf.ptcl_num
+        dens = scatter(ptcl, conf, val=val)
+        dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype)
+        kvec = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # has unit    
+        dens = fftfwd(dens)  # normalization canceled by that of irfftn below
+        pot = laplace(kvec, dens, cosmo) # mesh shape in Fourier space
+        pot = fftinv(pot, shape=conf.mesh_shape)
+        # project potential field and plot
+        chi_i = chi_a(a_prev, cosmo, conf)
+        chi_f = chi_a(a_next, cosmo, conf)
+        ray_cell_size, ray_mesh_shape = compute_ray_mesh(chi_i, chi_f, conf)
+        lens_mesh2D = lens_plane_nonperiodic(None, pot, conf, chi_i, chi_f, ray_mesh_shape, ray_cell_size, cosmo)
+        print('chi_i', chi_i, 'chi_f', chi_f)
+        c = plt.imshow(lens_mesh2D)
+        plt.colorbar(c)
+        plt.show()
+        # k2 = sum(k**2 for k in kvec)
+        # k2_zeros = jnp.where(k2 <= 1e-3, 1, 0)
+        # print(k2.shape)
+        # print('min', jnp.min(k2), 'max', jnp.max(k2))
+        # c = plt.imshow(k2_zeros.sum(axis=2))
+        # plt.colorbar(c)
+        # plt.xlim(-10,270)
+        # plt.ylim(-10,270)
+        # plt.show()
         if not static:
             ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)
     

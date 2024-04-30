@@ -54,30 +54,50 @@ def _scatter(pmid, disp, conf, mesh, val, offset, cell_size):
 
     return mesh
 
+def scatter_ray(disp, val, conf, offset, cell_size, mesh_shape):
+    """Scatter values from a collection of 2D particles onto a 2D mesh
 
-# @custom_vjp #TODO: No VJP defined for custom_vjp function _scatter_rt using defvjp.
-def _scatter_rt(pmid, disp, conf, mesh, val, offset, ray_cell_size, ray_mesh_shape, ray_mesh_size, ray_num, ):
-    # remove dependence on conf.chunk_size
-    ptcl_num, spatial_ndim = pmid.shape # (lens_mesh_size, 2)
+    Parameters
+    ----------
+    disp : ArrayLike
+        Displacements of the 2D particles.
+    val : ArrayLike
+        Values of the 2D particles, has shape (N_ptcl, dim_val).
+    conf : Configuration
+        Configuration object.
+    offset : ArrayLike, optional
+        Offset of the 2D mesh relative to the 2D particles.
+    cell_size : float
+        2D mesh resolution.
+    mesh_shape : ArrayLike
+        Shape of the 2D mesh.
 
-    # if val is None:
-    #     val = ray_mesh_size / ray_num
+    Returns
+    -------
+    mesh : jax.Array
+        Output 2D mesh.
+    """
+    # Set pmid to 0 since we do not need it. 
+    # The number of particles we will scatter
+    N_ptcl = val.shape[0]
+    dim_val = val.shape[1]
+    pmid = jnp.zeros((N_ptcl, 2), dtype=conf.pmid_dtype)
+    disp = jnp.asarray(disp, dtype=conf.float_dtype)
+    mesh = jnp.zeros(mesh_shape + (dim_val,), dtype=conf.float_dtype)
     val = jnp.asarray(val, dtype=conf.float_dtype)
+    return _scatter_ray(pmid, disp, conf, mesh, val, offset, cell_size)
 
-    if mesh is None:
-        mesh = jnp.zeros(ray_mesh_shape + val.shape[1:], dtype=conf.float_dtype)
-    mesh = jnp.asarray(mesh, dtype=conf.float_dtype)
-
-    if mesh.shape[spatial_ndim:] != val.shape[1:]:
+def _scatter_ray(pmid, disp, conf, mesh, val, offset, cell_size):
+    ptcl_num, spatial_ndim = pmid.shape
+    # the dimensionality of the values (scalar or vector) should match
+    if mesh.shape[spatial_ndim:] != val.shape[1:]: 
         raise ValueError('channel shape mismatch: '
                          f'{mesh.shape[spatial_ndim:]} != {val.shape[1:]}')
-
-    remainder, chunks = _chunk_split(ptcl_num, None, pmid, disp, val) # conf.chunk_size -> None
-
-    carry = mesh, offset, ray_cell_size, ray_mesh_shape
+    remainder, chunks = _chunk_split(ptcl_num, conf.chunk_size, pmid, disp, val)
+    carry = mesh, offset, cell_size
     if remainder is not None:
-        carry = _scatter_chunk_rt(carry, remainder)[0]
-    carry = scan(_scatter_chunk_rt, carry, chunks)[0]
+        carry = _scatter_chunk_ray(carry, remainder)[0]
+    carry = scan(_scatter_chunk_ray, carry, chunks)[0]
     mesh = carry[0]
 
     return mesh
@@ -107,8 +127,8 @@ def _scatter_chunk(carry, chunk):
     carry = conf, mesh, offset, cell_size
     return carry, None
 
-def _scatter_chunk_rt(carry, chunk):
-    mesh, offset, ray_cell_size, ray_mesh_shape = carry
+def _scatter_chunk_ray(carry, chunk):
+    mesh, offset, cell_size = carry
     pmid, disp, val = chunk
 
     spatial_ndim = pmid.shape[1]
@@ -118,8 +138,10 @@ def _scatter_chunk_rt(carry, chunk):
     chan_axis = tuple(range(-chan_ndim, 0))
 
     # multilinear mesh indices and fractions
-    ind, frac = enmesh(pmid, disp, ray_cell_size, ray_mesh_shape,
-                       offset, ray_cell_size, spatial_shape, False)
+    # ind, frac = enmesh(pmid, disp, cell_size, mesh_shape,
+    #                    offset, cell_size, spatial_shape, False)
+    ind, frac = enmesh(pmid, disp, cell_size, None, # mesh_shape=None -> open BC
+                       offset, cell_size, spatial_shape, False)
 
     if val.ndim != 0:
         val = val[:, jnp.newaxis]  # insert neighbor axis
@@ -129,7 +151,7 @@ def _scatter_chunk_rt(carry, chunk):
     frac = jnp.expand_dims(frac, chan_axis)
     mesh = mesh.at[ind].add(val * frac)
 
-    carry = mesh, offset, ray_cell_size, ray_mesh_shape
+    carry = mesh, offset, cell_size
     return carry, None
 
 

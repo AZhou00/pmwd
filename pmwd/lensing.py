@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from jax import custom_vjp,linearize,jvp,vjp,jit
 from jax.lax import dynamic_slice_in_dim
-from pmwd.scatter import scatter,_scatter_rt
+from pmwd.scatter import scatter,scatter_ray
 from pmwd.gather import gather, _gather_rt
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
 from pmwd.boltzmann import chi_a, r_a, r_chi, growth, growth_chi, AD_a
@@ -58,6 +58,7 @@ def grad_phi(a, ptcl, cosmo, conf):
     """
     # length 3 tuple, ith has shape (mesh_shape[i], 1, 1)
     kvec_ptc = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # unit of [1/Mpc]
+    print('kvec_ptc.dtype', kvec_ptc[0].dtype)
     # RHS of Poisson's equation
     
     # if point source mass ------------------
@@ -174,41 +175,15 @@ def project(
     # should not use np.where and set coordr=0 entry to 0, because we need to remove these values
     coord2D /= (coordr + 1e-5)[:, jnp.newaxis]  # shape (N_x * N_y * N_z, 2)
 
-    # mask out the 3D mesh points that falls considerably far away from the lens plane
-    # note mesh2D here is already padded so do not need to pad any further
-    mask = jnp.where(coord2D[:, 0] > (mesh2D_mesh_shape[0] * mesh2D_cell_size / 2), 0.0, 1)
-    mask *= jnp.where(
-        coord2D[:, 0] < (-mesh2D_mesh_shape[0] * mesh2D_cell_size / 2), 0.0, 1
-    )
-    mask *= jnp.where(coord2D[:, 1] > (mesh2D_mesh_shape[1] * mesh2D_cell_size / 2), 0.0, 1)
-    mask *= jnp.where(
-        coord2D[:, 1] < (-mesh2D_mesh_shape[1] * mesh2D_cell_size / 2), 0.0, 1
-    )
-    val_mesh3D = val_mesh3D * mask[:, jnp.newaxis]
-    # https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
-
-    val_mesh2D = _scatter_rt(
-        # this is place holder; positions of the 3D mesh points are given by 'disp';
-        # shape (N_x * N_y * N_z, 2)
-        pmid=jnp.zeros_like(coord2D).astype(conf.pmid_dtype),
-        # positions of the 3D mesh points
-        # shape (N_x * N_y * N_z, 2)
+    val_mesh2D = scatter_ray(
         disp=coord2D,
+        val=val_mesh3D,
         conf=conf,
-        # place holder for the 2D mesh
-        mesh=jnp.zeros(mesh2D_mesh_shape + (N_v,), dtype=conf.float_dtype),
-        # values of the 3D mesh points
-        # shape (N_x * N_y * N_z, N_v)
-        val=val_mesh3D, #
-        # offset of the 2D mesh relative to the 3D mesh points
         offset=ray_mesh_center(mesh2D_cell_size, mesh2D_mesh_shape, dtype=conf.float_dtype),
-        # cell size of the 2D mesh
-        ray_cell_size=mesh2D_cell_size,
-        ray_mesh_shape=mesh2D_mesh_shape,
-        ray_mesh_size=mesh2D_mesh_shape[0] * mesh2D_mesh_shape[1],
-        ray_num=conf.ray_num,
+        cell_size=mesh2D_cell_size,
+        mesh_shape=mesh2D_mesh_shape,
     )
-    # shape (mesh2D_mesh_shape + (N_v,))
+
     return val_mesh2D
 
 
@@ -226,29 +201,38 @@ def mesh3D_coord(chi_i, chi_f, cosmo, conf):
 
     x = jnp.arange(conf.mesh_shape[0]).astype(conf.float_dtype) * conf.cell_size
     y = jnp.arange(conf.mesh_shape[1]).astype(conf.float_dtype) * conf.cell_size
-    
+    print('x min and max', x.min(), x.max())
+    print('y min and max', y.min(), y.max())
+    print(conf.box_size, "box_size")
     # # x and y shift based on n_i
     # x += n_i * (2/7) * conf.box_size[0]
     # y += n_i * (2/7) * conf.box_size[1]
     # # periodic boundary condition
     # x = x % conf.box_size[0]
     # y = y % conf.box_size[1]
+
+    # x, y = x - (conf.box_size[0]) / 2, y - (conf.box_size[1]) / 2
+    print((x - (conf.box_size[0]) / 2)[0:10],'old x[0:10]')
+    x, y = x - x.mean(), y - y.mean()
+    print(x[0:10], "x[0:10]")
+    print(x.mean(), y.mean(), "x.mean(), y.mean()")
     
-    x, y = x - conf.box_size[0] / 2, y - conf.box_size[1] / 2
-    
-    z = jnp.arange(conf.mesh_shape[2],dtype=conf.float_dtype) * conf.cell_size
+    z = jnp.arange(conf.mesh_shape[2], dtype=conf.float_dtype) * conf.cell_size
     # z += n_i * b
     # z_next_box = z + (n_f - n_i) * b
     # z = jnp.where(z_next_box <= chi_f, z_next_box, z).astype(conf.float_dtype)
     r = r_chi(z, cosmo, conf).astype(conf.float_dtype)
-    
+    print(r.dtype, "r.dtype")
+    print(x.dtype, "x.dtype")
     # tuple of 3, each has shape (N_x, N_y, N_z)
     coord3D = jnp.meshgrid(*[x, y, r], indexing="ij")
     # shape (N_x, N_y, N_z, 3)
     coord3D = jnp.stack(coord3D, axis=-1)
     # shape (N_x * N_y * N_z, 3)
     coord3D = coord3D.reshape(-1, conf.dim)
+    print(coord3D.dtype, "coord3D.dtype")
     return coord3D, z, r
+
 
 def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, cosmo, conf):
     """
