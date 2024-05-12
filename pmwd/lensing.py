@@ -1,10 +1,11 @@
 import jax.numpy as jnp
+import jax
 from jax import custom_vjp, linearize, jvp, vjp, jit
 from jax.lax import dynamic_slice_in_dim
 from pmwd.scatter import scatter, scatter_ray
 from pmwd.gather import gather_ray
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
-from pmwd.boltzmann import chi_a, r_a, r_chi, growth, growth_chi, AD_a
+from pmwd.boltzmann import chi_a, r_a, r_chi, growth, growth_chi, AD_a, a_chi
 from pmwd.ray_mesh import compute_ray_mesh, ray_mesh_center
 from pmwd.sto.so import sotheta, pot_sharp, grad_sharp
 
@@ -12,7 +13,7 @@ from functools import partial
 
 import matplotlib.pyplot as plt
 import matplotlib
-from vermeer import snapshot  # .pm.snapshot import
+# from vermeer import snapshot  # .pm.snapshot import
 
 
 def deconv_tophat(kvec, width, field):
@@ -98,22 +99,11 @@ def grad_phi(a, ptcl, cosmo, conf):
     # length 3 tuple, ith has shape (mesh_shape[i], 1, 1)
     kvec_ptc = fftfreq(conf.mesh_shape, conf.cell_size, dtype=conf.float_dtype) # unit of [1/Mpc]
 
-    # RHS of Poisson's equation
-    # if point source mass ------------------
-    val = jnp.zeros(conf.ptcl_num, dtype=conf.float_dtype)
-    val = val.at[0].set(conf.point_source_mass)
-    val /= conf.ptcl_cell_vol # point_source_mass in unit of rho_crit * Omega_m * 1Mpc^3
-    val *= conf.mesh_size / conf.ptcl_num
-    dens = scatter(ptcl, conf, val=val)
-    dens -= 0  # overdensity
+    dens = scatter(ptcl, conf)
+    dens -= 1  # overdensity
     dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype) 
-    
-    # # if cosmological ------------------
-    # dens = scatter(ptcl, conf, val=val)
-    # dens -= 1  # overdensity
-    # dens *= 1.5 * cosmo.Omega_m.astype(conf.float_dtype) 
 
-    # Solve Poisson's equation for the potential 
+    # Solve Poisson's equation for the potential
     # fft mesh_shape, normalization canceled by that of irfftn below
     dens = fftfwd(dens)  
     pot = laplace(kvec_ptc, dens, cosmo) # apply -1/k^2 * (...)
@@ -121,7 +111,7 @@ def grad_phi(a, ptcl, cosmo, conf):
     if conf.so_type is not None:  # spatial optimization
         theta = sotheta(cosmo, conf, a)
         pot = pot_sharp(pot, kvec_ptc, theta, cosmo, conf, a)
-    
+
     # Compute the negative gradient of the potential, apply -ik * (...)
     grad_phi3D = []
     for k in kvec_ptc:
@@ -137,7 +127,74 @@ def grad_phi(a, ptcl, cosmo, conf):
     return grad_phi3D
 
 
+def rotation_matrix_x(theta):
+    c, s = jnp.cos(theta), jnp.sin(theta)
+    return jnp.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+
+
+def rotation_matrix_y(theta):
+    c, s = jnp.cos(theta), jnp.sin(theta)
+    return jnp.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+
+def rotation_matrix_z(theta):
+    c, s = jnp.cos(theta), jnp.sin(theta)
+    return jnp.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+@jit
+def rotate_coordinates(coords, angles):
+    """
+    Rotate coordinates based on a vector of angles [theta_x, theta_y, theta_z].
+    """
+    theta_x, theta_y, theta_z = angles
+    Rx = rotation_matrix_x(theta_x)
+    Ry = rotation_matrix_y(theta_y)
+    Rz = rotation_matrix_z(theta_z)
+
+    R = Rz @ Ry @ Rx
+
+    return jnp.dot(coords, R.T)
+
+
+@jit
+def shift_z_conditional(coord3D, delta_z, threshold):
+    """Shift the z-coordinate by delta_z for all z-coordinates less than the threshold.
+    Args:
+    coord3D: A 4D array of shape (Nx, Ny, Nz, 3), containing x, y, z coordinates.
+    """
+    z_coords = coord3D[..., 2]
+    new_z_coords = jnp.where(z_coords+delta_z < threshold, z_coords + delta_z, z_coords)
+    new_coord3D = coord3D.at[..., 2].set(new_z_coords)
+    return new_coord3D
+
+
 def mesh3D_coord(chi_i, chi_f, cosmo, conf, periodic=False):
+    """
+    assumes chi_f - chi_i < conf.box_size[2]
+    i.e., n_f - n_i = 0 or 1
+    conf.dim == 3
+    x: x coordinates of the 3D mesh, shape (N_x,), x.mean() = 0, unit [L]
+    y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
+    r: radial comoving distance, shape (N_z,), unit [L]
+    """
+    # monolit. mesh
+    x = jnp.arange(conf.mesh_shape[0]).astype(conf.float_dtype) * conf.cell_size
+    y = jnp.arange(conf.mesh_shape[1]).astype(conf.float_dtype) * conf.cell_size
+    z = jnp.arange(conf.mesh_shape[2]).astype(conf.float_dtype) * conf.cell_size
+    x_mean, y_mean = x.mean(), y.mean()
+    x, y = x - x_mean, y - y_mean
+    z = jnp.arange(conf.mesh_shape[2]).astype(conf.float_dtype) * conf.cell_size
+    r = r_chi(z, cosmo, conf).astype(conf.float_dtype)
+    # tuple of 3, each has shape (N_x, N_y, N_z)
+    coord3D = jnp.meshgrid(*[x, y, r], indexing="ij")
+    coord3D = jnp.stack(coord3D, axis=-1) # shape (N_x, N_y, N_z, 3)
+    coord3D = coord3D.reshape(-1, conf.dim) # shape (N_x * N_y * N_z, 3)
+
+    return coord3D, z, r
+
+
+def defl_pbc(chi_i, chi_f, cosmo, conf, pot, D_c, a_c, ray_cell_size, periodic=True):
     """
     assumes chi_f - chi_i < conf.box_size[2]
     i.e., n_f - n_i = 0 or 1
@@ -148,32 +205,67 @@ def mesh3D_coord(chi_i, chi_f, cosmo, conf, periodic=False):
     """
     x = jnp.arange(conf.mesh_shape[0]).astype(conf.float_dtype) * conf.cell_size
     y = jnp.arange(conf.mesh_shape[1]).astype(conf.float_dtype) * conf.cell_size
-    if periodic:
-        n_i = chi_i // conf.box_size[2]
-        n_f = chi_f // conf.box_size[2]
-        # x and y shift based on n_i
-        x += n_i * (2/7) * conf.box_size[0]
-        y += n_i * (2/7) * conf.box_size[1]
-        # periodic boundary condition
-        x = x % conf.box_size[0]
-        y = y % conf.box_size[1]
-    x, y = x - x.mean(), y - y.mean()
-    
-    z = jnp.arange(conf.mesh_shape[2], dtype=conf.float_dtype) * conf.cell_size
-    if periodic:
-        z += n_i * conf.box_size[2]
-        z_next_box = z + (n_f - n_i) * conf.box_size[2]
-        z = jnp.where(z_next_box <= chi_f, z_next_box, z).astype(conf.float_dtype)
+    z = jnp.arange(conf.mesh_shape[2]).astype(conf.float_dtype) * conf.cell_size
+    x_mean, y_mean,z_mean = x.mean(), y.mean(), z.mean()
+    x, y, z = x - x_mean, y - y_mean, z - z_mean
+    coord3D = jnp.meshgrid(*[x, y, z], indexing="ij")
+    coord3D = jnp.stack(coord3D, axis=-1) # shape (N_x, N_y, N_z, 3)
+    coord3D = coord3D.reshape(-1, conf.dim) # shape (N_x * N_y * N_z, 3)
 
-    r = r_chi(z, cosmo, conf).astype(conf.float_dtype)
-    # tuple of 3, each has shape (N_x, N_y, N_z)
-    coord3D = jnp.meshgrid(*[x, y, r], indexing="ij")
-    # shape (N_x, N_y, N_z, 3)
-    coord3D = jnp.stack(coord3D, axis=-1)
-    # shape (N_x * N_y * N_z, 3)
-    coord3D = coord3D.reshape(-1, conf.dim)
-    return coord3D, z, r
+    # apply PBC
+    n_i = int(chi_i // conf.box_size[2])
+    n_f = int(chi_f // conf.box_size[2])
 
+    # only works for square boxes
+    # generate 50 floats using rngkey(0)
+    rng_x = jax.random.PRNGKey(1)
+    rng_y = jax.random.PRNGKey(2)
+    rng_z = jax.random.PRNGKey(3)
+    rng_trans = jax.random.PRNGKey(4)
+    rng_trans_z = jax.random.PRNGKey(5)
+
+    rand_trans = jax.random.uniform(rng_trans, shape=(50,), dtype=conf.float_dtype)
+    rand_trans_z = jax.random.uniform(rng_trans_z, shape=(50,), dtype=conf.float_dtype)
+    rand_angx = jax.random.randint(rng_x, shape=(50,), minval=0, maxval=4, dtype=conf.int_dtype)
+    rand_angy = jax.random.randint(rng_y, shape=(50,), minval=0, maxval=4, dtype=conf.int_dtype)
+    rand_angz = jax.random.randint(rng_z, shape=(50,), minval=0, maxval=4, dtype=conf.int_dtype)
+    rand_angx = jnp.asarray(rand_angx).astype(conf.float_dtype)
+    rand_angy = jnp.asarray(rand_angy).astype(conf.float_dtype)
+    rand_angz = jnp.asarray(rand_angz).astype(conf.float_dtype)
+
+    # rotate
+    angle_x = jnp.pi * rand_angx[0] / 2
+    angle_y = jnp.pi * rand_angy[1] / 2
+    angle_z = jnp.pi * rand_angz[2] / 2
+    coord3D = rotate_coordinates(coord3D, angles=jnp.array([angle_x, angle_y, angle_z]))
+
+    # shift
+    delta = jnp.array([
+        rand_trans[n_i] * conf.box_size[0],
+        rand_trans[-n_i-1] * conf.box_size[1],
+        rand_trans_z[n_i] * conf.box_size[2]])
+    coord3D = coord3D + delta
+    # boundary condition
+    coord3D = coord3D % jnp.array(conf.box_size).astype(conf.float_dtype)
+    # shift to center on x/y axis, and shift z
+    delta = jnp.array([-x_mean, -y_mean, n_i * conf.box_size[2]])
+    coord3D = coord3D + delta
+    coord3D = shift_z_conditional(coord3D, conf.box_size[2], chi_f)
+
+    pot = pot.reshape(-1, 3)
+    pot = rotate_coordinates(pot, angles=jnp.array([angle_x, angle_y, angle_z]))
+
+    # apply kernel
+    pot = pot*jnp.where((coord3D[..., 2] >= chi_i) & (coord3D[..., 2] <= chi_f), 2*r_chi(coord3D[..., 2], cosmo, conf)/conf.c, 0.0)[:,None]
+    pot = pot * jnp.where((coord3D[..., 2] >= conf.chi_rt_mincut), 1.0, 0.0)[:, None]
+    pot = pot * growth_chi(coord3D[..., 2], cosmo, conf)[:, None] / D_c
+    pot = pot * a_c / a_chi(coord3D[..., 2], cosmo, conf)[:, None]  # growth correction
+    pot = pot / a_c  # Poisson factor
+    pot = pot * jnp.where(r_chi(coord3D[..., 2], cosmo, conf) > 1e-3, conf.ptcl_cell_vol / ray_cell_size**2 / r_chi(coord3D[..., 2], cosmo, conf)**2, 0.0)[:,None]
+    pot = pot.astype(conf.float_dtype)
+    pot = pot[..., 0:2] # transverse gradient
+
+    return coord3D, pot
 
 def project(
     val_mesh3D,
@@ -219,8 +311,6 @@ def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_sh
 
     chi_i = chi_a(a_i, cosmo, conf)
     chi_f = chi_a(a_f, cosmo, conf)
-    chi_maxsource = chi_a(conf.a_nbody_ray[-1], cosmo, conf)
-    chi_maxsource = conf.box_size[2]
     D_c = growth(a_c, cosmo, conf, order=1, deriv=0)
 
     # print('------------------')
@@ -231,24 +321,27 @@ def deflection_field(ptcl, a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_sh
     # print number of particle mesh planes
     # print(f"{'# planes covered':>15} = {(chi_f-chi_i)/conf.cell_size}")
     # particle mesh ------------------
-    coord3D, z, r = mesh3D_coord(chi_i, chi_f, cosmo, conf, periodic=True)
+    
+    # uncomment for non-pbc
+    # coord3D, z, r = mesh3D_coord(chi_i, chi_f, cosmo, conf, periodic=True)
     
     # Potential gradient ------------------
     # (mesh_shape + (3,))
-    # grad_phi3D /= a_c # Poisson
     # grad_phi3D /= (conf.mesh_size / conf.ptcl_num) # mass scale correction
     
-    # compute lensing kernel on the z axis and broadcast to x & y
-    kernel = jnp.where((z >= chi_i) & (z <= chi_f), 2 * r / conf.c, 0.0)  # shape (N_z,)
-    kernel *= jnp.where((z >= conf.chi_rtmin) & (z <= chi_maxsource), 1, 0)
+    # uncomment for non-pbc
+    # # compute lensing kernel on the z axis and broadcast to x & y
+    # kernel = jnp.where((z >= chi_i) & (z <= chi_f), 2 * r / conf.c, 0.0)  # shape (N_z,)
+    # kernel *= jnp.where((z >= conf.chi_rt_mincut), 1.0, 0.0)
     # kernel *= growth_chi(z, cosmo, conf) / D_c
     # kernel /= a_c # Poisson factor
-    kernel *= jnp.where(r > 1e-3, conf.ptcl_cell_vol / ray_cell_size**2 / r**2, 0.0)
-    kernel = kernel.astype(conf.float_dtype)
+    # kernel *= jnp.where(r > 1e-3, conf.ptcl_cell_vol / ray_cell_size**2 / r**2, 0.0)
+    # kernel = kernel.astype(conf.float_dtype)
+    # grad_phi3D = grad_phi3D[..., 0:2] # transverse gradient
+    # defl_mesh3D = jnp.einsum("xyzv,z->xyzv", grad_phi3D, kernel) # grad_phi3D shape = (N_x, N_y, N_z, 2)
+    # defl_mesh3D = defl_mesh3D.reshape(-1, 2)  # (mesh_shape + (2,)) -> (mesh_size, 2)
     
-    grad_phi3D = grad_phi3D[..., 0:2] # transverse gradient
-    defl_mesh3D = jnp.einsum("xyzv,z->xyzv", grad_phi3D, kernel) # grad_phi3D shape = (N_x, N_y, N_z, 2)
-    defl_mesh3D = defl_mesh3D.reshape(-1, 2)  # (mesh_shape + (2,)) -> (mesh_size, 2)
+    coord3D, defl_mesh3D = defl_pbc(chi_i, chi_f, cosmo, conf, grad_phi3D, D_c, a_c, ray_cell_size)
     defl_2D = project(
         val_mesh3D=defl_mesh3D,
         coord3D=coord3D,

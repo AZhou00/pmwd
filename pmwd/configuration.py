@@ -28,6 +28,8 @@ class Configuration:
         Lagrangian particle grid cell size in [L].
     ptcl_grid_shape : tuple of int
         Lagrangian particle grid shape, in ``len(ptcl_grid_shape)`` spatial dimensions.
+    ray_spacing : float
+        Ray grid cell size in [rad].
     ray_grid_shape : tuple of int
         tuple of length 2
     mesh_shape : int, float, or tuple of int, optional
@@ -105,16 +107,13 @@ class Configuration:
 
     ray_spacing: float
     ray_grid_shape: Tuple[int, ...]
-    ray_mesh_iota: float = 0.5
-    ray_mesh_p_x: int = 256
-    ray_mesh_p_y: int = 256
 
     mesh_shape: Union[float, Tuple[int, ...]] = 1
     ray_mesh_shape_default: Union[float, Tuple[int, ...]] = 1
 
     cosmo_dtype: DTypeLike = jnp.float64
     pmid_dtype: DTypeLike = jnp.int16 
-    float_dtype: DTypeLike = jnp.float64
+    float_dtype: DTypeLike = jnp.float32 # or 64
 
     k_pivot_Mpc: float = 0.05
 
@@ -143,11 +142,6 @@ class Configuration:
     growth_inistep: Union[float, None,
                           Tuple[Optional[float], Optional[float]]] = (1, None)
 
-    # other ray tracing parameters, limiting z(a) for ray tracing. i.e., furthest source location
-    z_rtlim: Optional[float] = 0.2
-    chi_rtmin: Optional[float] = 20
-    point_source_mass: Optional[float] = 1 # in unit of rho_crit * Omega_m * 1Mpc^3
-    point_source_chi_l: Optional[float] = 350 # in Mpc/h
     lpt_order: int = 2
 
     a_start: float = 1/64
@@ -161,8 +155,24 @@ class Configuration:
 
     symp_splits: Tuple[Tuple[float, float], ...] = ((0, 0.5), (1, 0.5))
     chunk_size: int = 2**24
-    
-    # SO related
+
+    # Ray tracing
+    z_rt_end: Optional[float] = 0.2
+    a_rt_start: Optional[float] = 1
+    # a_nbody_rt_num:
+    #   if None then will mimick the a_nbody_steps as close as possible,
+    #       though theoretically it could still be a little different. Set z_rt_end such that
+    #       it corresponds to an a_nbody_step if you want to avoid this.
+    #   if int then use this the number of steps for ray tracing.
+    a_nbody_rt_num: Optional[int] = None 
+    chi_rt_mincut: Optional[float] = 5
+    point_source_mass: Optional[float] = 1 # in unit of rho_crit * Omega_m * 1Mpc^3
+    point_source_chi_l: Optional[float] = 350 # in Mpc/h
+    ray_mesh_iota: float = 1
+    ray_mesh_p_x: int = 256
+    ray_mesh_p_y: int = 256
+
+    # SO
     # type of SO method
     # None: no SO applied
     # 'SR': Symbolic Regression expression
@@ -172,7 +182,7 @@ class Configuration:
     so_nodes: Optional[list] = None
     soft_i: Optional[str] = None
     softening_length: Optional[float] = None
-    
+
     def __post_init__(self):
         if self._is_transforming():
             return
@@ -356,7 +366,7 @@ class Configuration:
 
     @property
     def a_nbody_step(self):
-        """N-body time integration scale factor step size."""
+        """N-body time integration scale factor step size.""" # step size
         return (self.a_stop - self.a_start) / self.a_nbody_num
 
     @property
@@ -372,21 +382,41 @@ class Configuration:
                             dtype=self.cosmo_dtype)
 
     @property
-    def a_rtlim(self):
-        """Scale factor of the furthest source redshift."""
-        return 1 / (1 + self.z_rtlim)
+    def a_rt_end(self):
+        """Scale factor at the end of ray tracing."""
+        return 1/(1+self.z_rt_end)
     
     @property
-    def a_nbody_ray(self):
-        """N-body time integration scale factor steps for backward ray tracing"""
+    def a_nbody_rt(self):
+        """
+        N-body time integration scale factor steps for backward ray tracing
+            a_nbody_rt_num: 
+            if None then will mimick the a_nbody_steps as close as possible, 
+                though theoretically it could still be a little different. Set z_rt_end such that
+                it corresponds to an a_nbody_step if you want to avoid this. 
+            if int then use this the number of steps for ray tracing.
+        """
         with jax.ensure_compile_time_eval():
-            index = jnp.argmax(self.a_nbody[::-1]<=self.a_rtlim)
-            result = self.a_nbody[::-1][:index+1]
-            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
-            result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
-            # result = jnp.sort(jnp.concatenate((result, (result[1:]+result[:-1])/2)), descending=True)
-            return result
-            # return self.a_nbody[::-1][:index+1]
+            if self.a_nbody_rt_num is not None:
+                a_nbody_rt = jnp.linspace(
+                    self.a_rt_start,
+                    self.a_rt_end,
+                    num=self.a_nbody_rt_num + 1,
+                    dtype=self.cosmo_dtype,
+                )
+            else:
+                # find the index of the last element that is smaller than a_rt_end
+                # e.g., if a_rt_end=0.80 and a_nbody goes to a=0.75 (the next smaller a) in 10 steps, then
+                # we will perform ray tracing to a=0.8 in 10 steps.
+                index = jnp.argmax(self.a_nbody[::-1] <= self.a_rt_end)
+                a_nbody_rt = jnp.linspace(
+                    self.a_rt_start,
+                    self.a_rt_end,
+                    num=index + 1,
+                    dtype=self.cosmo_dtype,
+                )
+            
+            return a_nbody_rt
 
     @property
     def growth_a(self):
@@ -416,7 +446,6 @@ class Configuration:
         return jnp.array([self.ptcl_grid_shape[0]*self.ptcl_spacing/2, 
                           self.ptcl_grid_shape[1]*self.ptcl_spacing/2],dtype=self.float_dtype)
 
-    
     # @property
     # def mesh_chi(self):
     #     # comoving coordinates of the particle mesh in z direction
@@ -426,9 +455,9 @@ class Configuration:
     # @property
     # def lens_mesh_shape(self):
     #     """Shape of the lens plane mesh grid.
-    #     Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane can be computed.
+    #     Given z_rt_end, the maximum thickness [number of mesh point] of the lens plane can be computed.
     #     The lens mesh is a slice of the particle mesh in z direction that covers the interval over which we will
-    #     integrate the lensing potential. 
+    #     integrate the lensing potential.
     #     """
     #     # chi has the same ordering as conf.a_nbody
     #     # chi = distance_cm(self.a_nbody, cosmo, conf)
@@ -442,8 +471,8 @@ class Configuration:
     #      591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
 
     #     # the max slice size is defined by the comoving distance covered by one time step update
-    #     # that includes z_rtlim
-    #     chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
+    #     # that includes z_rt_end
+    #     chi_rtlim = jnp.interp(self.a_rt_end, self.a_nbody, chi) # comoving distance of the furthest source
     #     id_chi_upperbound = jnp.where(chi >= chi_rtlim)[0][-1] # chi is decreasingly sorted
     #     id_chi_lowerbound = jnp.where(chi <= chi_rtlim)[0][0] # chi is decreasingly sorted
     #     delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h
@@ -456,10 +485,9 @@ class Configuration:
     #     with jax.ensure_compile_time_eval():
     #         return jnp.array(self.lens_mesh_shape).prod().item()
 
-
     # @property
     # def lens_slice_size(self):
-    #     """Given z_rtlim, the maximum thickness [number of mesh point] of the lens plane.
+    #     """Given z_rt_end, the maximum thickness [number of mesh point] of the lens plane.
     #     in fact we only need 1/2 of what is here, but just to be safe for now...
     #     """
     #     # chi = distance(self.a_nbody, cosmo, conf)
@@ -473,8 +501,8 @@ class Configuration:
     #      591.641,   511.082,   432.524,   355.907,   281.175,   208.272,   137.143,    67.736,     0.   ])
 
     #     # the max slice size is defined by the comoving distance covered by one time step update
-    #     # that includes z_rtlim
-    #     chi_rtlim = jnp.interp(self.a_rtlim, self.a_nbody, chi) # comoving distance of the furthest source
+    #     # that includes z_rt_end
+    #     chi_rtlim = jnp.interp(self.a_rt_end, self.a_nbody, chi) # comoving distance of the furthest source
     #     id_chi_upperbound = jnp.where(chi >= chi_rtlim)[0][-1] # chi is decreasingly sorted
     #     id_chi_lowerbound = jnp.where(chi <= chi_rtlim)[0][0] # chi is decreasingly sorted
     #     delta_chi = chi[id_chi_upperbound]-chi[id_chi_lowerbound] # Mpc/h

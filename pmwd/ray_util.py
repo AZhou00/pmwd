@@ -139,7 +139,7 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
     ymin = -conf.box_size[0]/2
     ymax = conf.box_size[0]/2
 
-    chi_s = chi_a(conf.a_nbody_ray[-1], cosmo, conf)
+    chi_s = chi_a(conf.a_nbody_rt[-1], cosmo, conf)
 
     # box
     xmin = 0
@@ -158,7 +158,7 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
 
     # lens planes
     lens_color = ['#8ecae6', '#fcbf49']
-    a_lens_planes = np.concatenate([conf.a_nbody_ray, (conf.a_nbody_ray[1:] + conf.a_nbody_ray[:-1]) / 2,])
+    a_lens_planes = np.concatenate([conf.a_nbody_rt, (conf.a_nbody_rt[1:] + conf.a_nbody_rt[:-1]) / 2,])
     a_lens_planes = np.sort(a_lens_planes)
     chi_lens = chi_a(a_lens_planes, cosmo, conf)
     n_lens = 0

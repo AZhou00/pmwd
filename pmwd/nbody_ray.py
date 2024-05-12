@@ -145,7 +145,7 @@ def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
     from pmwd.pm_util import fftfreq, fftfwd, fftinv
 
     # a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
-    a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
+    a_nbody = conf.a_nbody_rt  # in reverse order up the maximum source redshift
 
     if not static:
         # initialize the acceleration to ptcl does not do anything else.
@@ -204,7 +204,7 @@ def nbody_ray_vis(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True, fold
     from pmwd import scatter
     
     # a_nbody = conf.a_nbody[::-1] if reverse else conf.a_nbody
-    a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
+    a_nbody = conf.a_nbody_rt  # in reverse order up the maximum source redshift
 
     # initialize the acceleration to ptcl does not do anything else.
     ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
@@ -275,7 +275,7 @@ def nbody_ray_vis(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True, fold
         # tick inwards for both x and y, larger
         ax.tick_params(axis='x',direction='in',length=6)
         ax.tick_params(axis='y',direction='in',length=6)
-        label = np.where(conf.a_nbody_ray == a_prev)[0][0]
+        label = np.where(conf.a_nbody_rt == a_prev)[0][0]
         plt.savefig(os.path.join('/ocean/projects/phy230060p/junzhez/pmwdray_test/blender_data/ray_tracing_lens_plane', f'{label:04d}.png'))
         plt.show()
         
@@ -302,10 +302,10 @@ def nbody_ray_vis(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, reverse=True, fold
 #     point mass lensing test
 #     all point mass is placed at the center of the box ~ 400Mpc/h, and source plane at the end of the box
 #         chi_l = conf.box_size[-1]/2 #Mpc/h
-#         chi_s = conf.box_size[-1] #Mpc/h, approx. chi_a(conf.a_nbody_ray[-1], cosmo, conf)
+#         chi_s = conf.box_size[-1] #Mpc/h, approx. chi_a(conf.a_nbody_rt[-1], cosmo, conf)
 #     """
 #     from pmwd.ray_util import deflection_pointsources
-#     a_nbody = conf.a_nbody_ray  # in reverse order up the maximum source redshift
+#     a_nbody = conf.a_nbody_rt  # in reverse order up the maximum source redshift
 #     ray, obsvbl_ray = nbody_ray_init(a_nbody[0], ray, obsvbl_ray, cosmo, conf)
 
 #     for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
