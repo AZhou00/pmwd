@@ -184,7 +184,6 @@ def mesh3D_coord(chi_i, chi_f, cosmo, conf, periodic=False):
     z = jnp.arange(conf.mesh_shape[2]).astype(conf.float_dtype) * conf.cell_size
     x_mean, y_mean = x.mean(), y.mean()
     x, y = x - x_mean, y - y_mean
-    z = jnp.arange(conf.mesh_shape[2]).astype(conf.float_dtype) * conf.cell_size
     r = r_chi(z, cosmo, conf).astype(conf.float_dtype)
     # tuple of 3, each has shape (N_x, N_y, N_z)
     coord3D = jnp.meshgrid(*[x, y, r], indexing="ij")
@@ -218,17 +217,17 @@ def defl_pbc(chi_i, chi_f, cosmo, conf, pot, D_c, a_c, ray_cell_size, periodic=T
 
     # only works for square boxes
     # generate 50 floats using rngkey(0)
-    rng_x = jax.random.PRNGKey(1)
-    rng_y = jax.random.PRNGKey(2)
-    rng_z = jax.random.PRNGKey(3)
-    rng_trans = jax.random.PRNGKey(4)
-    rng_trans_z = jax.random.PRNGKey(5)
+    rng_x = jax.random.PRNGKey(int(chi_i)+1)
+    rng_y = jax.random.PRNGKey(int(chi_i)+2)
+    rng_z = jax.random.PRNGKey(int(chi_i)+3)
+    rng_trans = jax.random.PRNGKey(int(chi_i)+4)
+    rng_trans_z = jax.random.PRNGKey(int(chi_i)+5)
 
     rand_trans = jax.random.uniform(rng_trans, shape=(50,), dtype=conf.float_dtype)
     rand_trans_z = jax.random.uniform(rng_trans_z, shape=(50,), dtype=conf.float_dtype)
-    rand_angx = jax.random.randint(rng_x, shape=(50,), minval=0, maxval=4, dtype=conf.int_dtype)
-    rand_angy = jax.random.randint(rng_y, shape=(50,), minval=0, maxval=4, dtype=conf.int_dtype)
-    rand_angz = jax.random.randint(rng_z, shape=(50,), minval=0, maxval=4, dtype=conf.int_dtype)
+    rand_angx = jax.random.randint(rng_x, shape=(50,), minval=0, maxval=4, dtype=jnp.int32)
+    rand_angy = jax.random.randint(rng_y, shape=(50,), minval=0, maxval=4, dtype=jnp.int32)
+    rand_angz = jax.random.randint(rng_z, shape=(50,), minval=0, maxval=4, dtype=jnp.int32)
     rand_angx = jnp.asarray(rand_angx).astype(conf.float_dtype)
     rand_angy = jnp.asarray(rand_angy).astype(conf.float_dtype)
     rand_angz = jnp.asarray(rand_angz).astype(conf.float_dtype)
