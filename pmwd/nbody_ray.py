@@ -131,7 +131,6 @@ def nbody_ray_step(a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf, ray_mesh_
     obsvbl_ray = observe(ray, obsvbl_ray, cosmo, conf)
     return ray, obsvbl_ray
 
-@partial(jit, static_argnums=(5,))
 def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
     """
     N-body time integration with ray tracing updates.
