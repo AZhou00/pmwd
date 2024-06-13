@@ -64,8 +64,12 @@ def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf, ray_mesh_params):
     
     # potential for the ray evaluated at half step
     # a dependency only affects SO
-    grad_phi3D = grad_phi((a_prev+a_next)/2, ptcl, cosmo, conf)
-    
+    if conf.so_type is not None:
+        grad_phi3D = grad_phi((a_prev+a_next)/2, ptcl, cosmo, conf)
+    else:
+        # ignore first entry and statically jit it
+        grad_phi3D = grad_phi(0, ptcl, cosmo, conf)
+        
     # KDK
     for d, k in conf.symp_splits:
         if d != 0:

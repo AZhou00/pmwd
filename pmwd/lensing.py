@@ -70,7 +70,7 @@ def neg_grad(k, pot, spacing):
     grad = neg_ik * pot
     return grad
 
-
+@partial(jit, static_argnums=(0,))
 def grad_phi(a, ptcl, cosmo, conf):
     """
     Compute the 3D gradient of the potential field at 3D mesh points.
@@ -356,6 +356,8 @@ def lensing(a_i, a_f, a_c, ray, grad_phi3D, cosmo, conf, ray_mesh_params):
     # ray_cell_size, ray_mesh_shape = compute_ray_mesh(r_i, r_f, conf)
     
     ray_cell_size, ray_mesh_shape = ray_mesh_params
+    ray_mesh_shape = jnp.asarray(ray_mesh_shape, jnp.int32)
+    ray_mesh_shape = (ray_mesh_shape[0], ray_mesh_shape[1])
 
     offset = ray_mesh_center(ray_cell_size, ray_mesh_shape, dtype=conf.float_dtype)
     # (ray_mesh_shape[0], ray_mesh_shape[1], 2)
