@@ -16,6 +16,9 @@ from pmwd.lpt import lpt
 from pmwd.nbody import nbody
 from pmwd.nbody_ray import nbody_ray
 
+from pmwd.ray_util import lens_plane_diagram
+from pmwd.sto.util import load_soparams
+
 try:
     from pmwd._version import __version__
 except ModuleNotFoundError:
