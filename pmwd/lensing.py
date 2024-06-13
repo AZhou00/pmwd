@@ -1,20 +1,14 @@
+from functools import partial
+
 import jax.numpy as jnp
 import jax
 from jax import custom_vjp, linearize, jvp, vjp, jit
-from jax.lax import dynamic_slice_in_dim
 from pmwd.scatter import scatter, scatter_ray
 from pmwd.gather import gather_ray
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
 from pmwd.boltzmann import chi_a, r_a, r_chi, growth, growth_chi, AD_a, a_chi
 from pmwd.ray_mesh import compute_ray_mesh, ray_mesh_center
 from pmwd.sto.so import sotheta, pot_sharp, grad_sharp
-
-from functools import partial
-
-import matplotlib.pyplot as plt
-import matplotlib
-# from vermeer import snapshot  # .pm.snapshot import
-
 
 def deconv_tophat(kvec, width, field):
     """perform 2D sinc^2 deconv in Fourier space. kvec from sparse meshgrid."""
