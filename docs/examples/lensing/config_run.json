@@ -1,0 +1,4 @@
+{
+    "ktnglike": {"ptcl_spacing": 0.4, "ptcl_grid_shape": [512, 512, 512], "rs": 0.2, "ray_shape": [1024, 1024], "z_rt_end": 1.034, "so": false, "t_step": 30, "iota": 0.5, "padding": 8},
+    "ktnglike_so": {"ptcl_spacing": 0.4, "ptcl_grid_shape": [512, 512, 512], "rs": 0.2, "ray_shape": [1024, 1024], "z_rt_end": 1.034, "so": true, "t_step": 30, "iota": 0.5, "padding": 8},
+}

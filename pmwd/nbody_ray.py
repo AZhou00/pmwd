@@ -69,19 +69,20 @@ def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf, ray_mesh_params):
     else:
         # ignore first entry and statically jit it
         grad_phi3D = grad_phi(0, ptcl, cosmo, conf)
-        
+
     # KDK
     for d, k in conf.symp_splits:
         if d != 0:
             D += d
             a_disp_next = a_prev * (1 - D) + a_next * D
             ray = drift_ray(a_vel, a_disp, a_disp_next, ray, cosmo, conf, ptcl)
-            a_disp = a_disp_next
+            # a_disp = a_disp_next
 
         if k != 0:
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
             a_c = (a_vel + a_vel_next) / 2
+            a_c = a_next
             ray = force_ray(a_vel, a_vel_next, a_c, ray, grad_phi3D, cosmo, conf, ray_mesh_params)
             ray = kick_ray(ray)
             a_vel = a_vel_next

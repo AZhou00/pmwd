@@ -70,7 +70,7 @@ def neg_grad(k, pot, spacing):
     grad = neg_ik * pot
     return grad
 
-@partial(jit, static_argnums=(0,))
+# @partial(jit, static_argnums=(0,))
 def grad_phi(a, ptcl, cosmo, conf):
     """
     Compute the 3D gradient of the potential field at 3D mesh points.
@@ -172,7 +172,7 @@ def mesh3D_coord(cosmo, conf):
     return coord3D, z
 
 
-def defl_pbc(chi_i, chi_f, cosmo, conf, pot, D_c, a_c, ray_cell_size):
+def defl_pbc(a_i, a_f, a_c, cosmo, conf, pot, ray_cell_size):
     """
     assumes chi_f - chi_i < conf.box_size[2]
     i.e., n_f - n_i = 0 or 1
@@ -181,6 +181,10 @@ def defl_pbc(chi_i, chi_f, cosmo, conf, pot, D_c, a_c, ray_cell_size):
     y: y coordinates of the 3D mesh, shape (N_y,), y.mean() = 0, unit [L]
     r: radial comoving distance, shape (N_z,), unit [L]
     """
+    chi_i = chi_a(a_i, cosmo, conf)
+    chi_f = chi_a(a_f, cosmo, conf)
+    D_c = growth(a_c, cosmo, conf, order=1, deriv=0)
+
     # compute the centered coord of this block
     x = jnp.arange(conf.mesh_shape[0]).astype(conf.float_dtype) * conf.cell_size
     y = jnp.arange(conf.mesh_shape[1]).astype(conf.float_dtype) * conf.cell_size
@@ -232,12 +236,13 @@ def defl_pbc(chi_i, chi_f, cosmo, conf, pot, D_c, a_c, ray_cell_size):
     # apply kernel (changed back to flat universe for a more readable demo, for curved space see prev versions)
     pot = pot * jnp.where((coord3D[..., 2] >= chi_i) & (coord3D[..., 2] <= chi_f), 2*coord3D[..., 2]/conf.c, 0.0)[:,None]
     pot = pot * jnp.where((coord3D[..., 2] >= conf.chi_rt_mincut), 1.0, 0.0)[:, None]
-    # pot = pot * growth_chi(coord3D[..., 2], cosmo, conf)[:, None] / D_c
-    # pot = pot * a_c / a_chi(coord3D[..., 2], cosmo, conf)[:, None]  # growth correction
+
+    pot = pot * growth_chi(coord3D[..., 2], cosmo, conf)[:, None] / D_c
+    pot = pot * a_c / a_chi(coord3D[..., 2], cosmo, conf)[:, None]  # growth correction
+
     pot = pot / a_c  # Poisson factor
     pot = pot * jnp.where(coord3D[..., 2] > 1e-3, conf.ptcl_cell_vol / ray_cell_size**2 / coord3D[..., 2]**2, 0.0)[:,None]
-    pot = pot.astype(conf.float_dtype)
-    pot = pot[..., 0:2] # transverse gradient
+    pot = pot.astype(conf.float_dtype)[..., 0:2] # transverse gradient
 
     return coord3D, pot
 
@@ -283,10 +288,6 @@ def deflection_field(a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, c
     All calculations follow unit in L=[Mpc] and T=[1/H0]
     """
 
-    chi_i = chi_a(a_i, cosmo, conf)
-    chi_f = chi_a(a_f, cosmo, conf)
-    D_c = growth(a_c, cosmo, conf, order=1, deriv=0)
-
     # print('------------------')
     # print('compute lensing maps')
     # print('------------------')
@@ -315,7 +316,7 @@ def deflection_field(a_i, a_f, a_c, grad_phi3D, ray_cell_size, ray_mesh_shape, c
     # defl_mesh3D = jnp.einsum("xyzv,z->xyzv", grad_phi3D, kernel) # grad_phi3D shape = (N_x, N_y, N_z, 2)
     # defl_mesh3D = defl_mesh3D.reshape(-1, 2)  # (mesh_shape + (2,)) -> (mesh_size, 2)
     
-    coord3D, defl_mesh3D = defl_pbc(chi_i, chi_f, cosmo, conf, grad_phi3D, D_c, a_c, ray_cell_size)
+    coord3D, defl_mesh3D = defl_pbc(a_i, a_f, a_c, cosmo, conf, grad_phi3D, ray_cell_size)
     defl_2D = project(
         val_mesh3D=defl_mesh3D,
         coord3D=coord3D,

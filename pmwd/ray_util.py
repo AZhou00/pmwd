@@ -129,7 +129,7 @@ def visual_ray_point_mass(theta0, theta_prev, theta_s, chi_l, chi_s_prev, chi_s,
     plt.show()
     return
 
-def lens_plane_diagram(cosmo, conf, chi_l=None):
+def lens_plane_diagram(cosmo, conf, chi_l=None, name=None):
     from matplotlib.patches import Arc
 
     f, ax = plt.subplots(1,1,figsize=(16,5))
@@ -252,6 +252,8 @@ def lens_plane_diagram(cosmo, conf, chi_l=None):
     ax.tick_params(axis='both', which='major', labelsize=12)
     # grid lines
     ax.grid(which='both')
+    if name is not None:
+        plt.savefig(name, bbox_inches='tight')
     plt.show()
 
 def lens_plane_nonperiodic(lens_thickness, dens, conf, chi_i, chi_f, ray_mesh_shape, ray_cell_size, cosmo):
