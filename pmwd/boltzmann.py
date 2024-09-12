@@ -1,7 +1,7 @@
 from jax import jit, custom_vjp, ensure_compile_time_eval, vmap
 import jax.numpy as jnp
 
-from pmwd.cosmology import H_deriv, Omega_m_a
+from pmwd.cosmology import E2, H_deriv, Omega_m_a
 from pmwd.ode_util import odeint
 from jax.scipy.integrate import trapezoid
 
@@ -22,16 +22,10 @@ def chi_integ(a_start, cosmo, conf):
     Returns:
     - Comoving distance in Mpc.
     """
-    Omega_k = cosmo.Omega_k
-    Omega_m = cosmo.Omega_m
-    Omega_r = 0  # TODO: cosmo.Omega_r
-    Omega_de = cosmo.Omega_de
-
     a = jnp.linspace(a_start, 1, 1000)
-    H_a = jnp.sqrt(Omega_m * a**-3 + Omega_r * a**-4 + Omega_k * a**-2 + Omega_de)
+    H_a = jnp.sqrt(E2(a, cosmo))
     integrand = conf.c / (a**2 * H_a)
     integral = trapezoid(integrand, x=a)
-
     return integral
 
 
@@ -47,14 +41,6 @@ def r_tab(cosmo, conf):
     distance_f = jit(vmap(chi_integ, in_axes=(0, None, None)))
     distance = distance_f(conf.distance_a, cosmo, conf)
     return cosmo.replace(r=distance)
-
-
-def AD_tab(cosmo, conf):
-    """Compute the angular diameter distance r(a)"""  # TODO this is only flat universe
-    distance_f = jit(vmap(chi_integ, in_axes=(0, None, None)))
-    distance = distance_f(conf.distance_a, cosmo, conf)
-    distance *= conf.distance_a
-    return cosmo.replace(AD=distance)
 
 
 def chi_a(a, cosmo, conf):
@@ -81,19 +67,6 @@ def r_a(a, cosmo, conf):
     r = jnp.interp(a, conf.distance_a, cosmo.r)
 
     return r.astype(float_dtype)
-
-
-def AD_a(a, cosmo, conf):
-    """Compute the angular diameter distance AD(a)"""
-    if cosmo.AD is None:
-        raise ValueError("Distance table is empty. Call AD_tab or boltzmann first.")
-
-    a = jnp.asarray(a)
-    float_dtype = jnp.promote_types(a.dtype, float)
-
-    AD = jnp.interp(a, conf.distance_a, cosmo.AD)
-
-    return AD.astype(float_dtype)
 
 
 def a_chi(chi, cosmo, conf):

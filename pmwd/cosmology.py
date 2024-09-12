@@ -75,8 +75,6 @@ class Cosmology:
     
     r: Optional[Array] = field(default=None, compare=False)
     
-    AD: Optional[Array] = field(default=None, compare=False)
-
     # probably belongs in conf but needs boltzmann to be called
     ray_cell_size_list: Optional[Array] = field(default=None, compare=False)
     ray_mesh_shape_list: Optional[Array] = field(default=None, compare=False)

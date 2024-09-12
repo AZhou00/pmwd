@@ -82,7 +82,7 @@ def integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf, ray_mesh_params):
             K += k
             a_vel_next = a_prev * (1 - K) + a_next * K
             a_c = (a_vel + a_vel_next) / 2
-            a_c = a_next
+            # a_c = a_next
             ray = force_ray(a_vel, a_vel_next, a_c, ray, grad_phi3D, cosmo, conf, ray_mesh_params)
             ray = kick_ray(ray)
             a_vel = a_vel_next
