@@ -1,7 +1,10 @@
 import jax.numpy as jnp
+import numpy as np
 import jax
 from functools import reduce
 from functools import partial
+from pmwd.boltzmann import r_a
+
 
 def fftlen(n, platform=None):
     """Find the next fast length for FFT on the platform.
@@ -52,14 +55,14 @@ def fftlen_(n, radices):
     # FIXME if need ensure_compile_time_eval
     # log_radix_2n = jnp.log(2*n)/jnp.log(radix) # log(2*n, radix)
     powers = [
-        radix ** (jnp.arange(1 + jnp.floor(jnp.log(2 * n) / jnp.log(radix))))
+        radix ** (np.arange(1 + np.floor(np.log(2 * n) / np.log(radix))))
         for radix in radices
     ]
-    products = reduce(jnp.kron, powers)
+    products = reduce(np.kron, powers)
     return products[products >= n].min().item()
 
 
-def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1, dtype=jnp.float32):
+def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1, dtype=np.float32):
     """
     Compute the size and shape of the ray mesh for a given lens plane and source plane.
 
@@ -83,16 +86,15 @@ def _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota=1, d
     """
 
     r_mean = (r_l + r_u) / 2.0
-    lambda_lim = jnp.max(jnp.array([l_3D / r_mean, mu_2D]))
+    lambda_lim = np.max(np.array([l_3D / r_mean, mu_2D]))
 
     nu_2D = iota * lambda_lim
     Nx = M_2D_x * mu_2D / nu_2D + p_x / iota
-    Nx = jnp.array(fftlen(Nx, platform=None))
-    Nx = Nx.astype(jnp.int32)
+    Nx = np.array(fftlen(Nx, platform=None))
+    Nx = Nx.astype(np.int32)
     Ny = M_2D_y * mu_2D / nu_2D + p_y / iota
-    Ny = jnp.array(fftlen(Ny, platform=None))
-    Ny = Ny.astype(jnp.int32)
-
+    Ny = np.array(fftlen(Ny, platform=None))
+    Ny = Ny.astype(np.int32)
     # diagnostics
     # print("------------------")
     # # particle mesh reso: l_3D / r_mean
@@ -126,8 +128,25 @@ def compute_ray_mesh(r_l, r_u, conf):
     if p_y == 0:
         p_y = 5
 
-    return _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota, dtype=conf.float_dtype)
+    return _compute_ray_mesh(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, p_x, p_y, iota)
 
+def precompute_mesh(conf, cosmo):    
+    a_nbody = conf.a_nbody_rt
+    ray_cell_size_list = []
+    ray_mesh_shape_list = []
+    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
+        a_vel = a_prev
+        for d, k in conf.symp_splits:
+            if k != 0:
+                a_vel_next = a_prev * (1 - k) + a_next * k                    
+                r_i = r_a(a_vel, cosmo, conf)
+                r_f = r_a(a_vel_next, cosmo, conf)
+                ray_cell_size, ray_mesh_shape = compute_ray_mesh(r_i, r_f, conf)
+                ray_cell_size_list.append(ray_cell_size)
+                ray_mesh_shape_list.append(tuple(map(int, ray_mesh_shape)))  # Ensure integers and keep as tuple
+                a_vel = a_vel_next
+
+    return (ray_cell_size_list, ray_mesh_shape_list)
 
 def ray_mesh_center(ray_cell_size, ray_mesh_shape, dtype=jnp.float32):
     center = -0.5 * jnp.array(
@@ -137,6 +156,7 @@ def ray_mesh_center(ray_cell_size, ray_mesh_shape, dtype=jnp.float32):
         ]
     ).astype(dtype)
     return center
+
 
 
 # def ray_mesh_diagnostic(mu_2D, M_2D_x, M_2D_y, r_l, r_u, l_3D, iota=0.5, p_x=0, p_y=0):

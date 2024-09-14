@@ -430,7 +430,7 @@ def varlin(R, a, cosmo, conf):
     return sigma2.astype(float_dtype)
 
 
-def boltzmann(cosmo, conf, transfer=True, growth=True, varlin=True, distance=True, mesh=True):
+def boltzmann(cosmo, conf, transfer=True, growth=True, varlin=True, distance=True):
     """Solve Einstein-Boltzmann equations and precompute transfer and growth functions,
     etc.
 
@@ -471,11 +471,6 @@ def boltzmann(cosmo, conf, transfer=True, growth=True, varlin=True, distance=Tru
     if distance:
         cosmo = chi_tab(cosmo, conf)
         cosmo = r_tab(cosmo, conf)
-
-    if mesh:
-        cosmo = precompute_mesh(conf, cosmo) 
-        # probably belongs to conf but this computation needs distance function to be ran first
-        # will move this later
     return cosmo
 
 @custom_vjp
@@ -557,39 +552,3 @@ def linear_power(k, a, cosmo, conf):
         Plin *= D**2
 
     return Plin.astype(float_dtype)
-
-def precompute_mesh(conf, cosmo):
-    from pmwd.boltzmann import r_a
-    from pmwd.ray_mesh import compute_ray_mesh
-    
-    a_nbody = conf.a_nbody_rt
-    ray_cell_size_list = []
-    ray_mesh_shape_list = []
-    for a_prev, a_next in zip(a_nbody[:-1], a_nbody[1:]):
-        def integrate_ray(a_prev, a_next, cosmo, conf):
-            D = K = 0
-            a_disp = a_vel = a_prev
-            
-            # KDK
-            for d, k in conf.symp_splits:
-                if d != 0:
-                    D += d
-                    a_disp_next = a_prev * (1 - D) + a_next * D
-                    a_disp = a_disp_next
-
-                if k != 0:
-                    K += k
-                    a_vel_next = a_prev * (1 - K) + a_next * K                    
-                    r_i = r_a(a_vel, cosmo, conf)
-                    r_f = r_a(a_vel_next, cosmo, conf)
-                    ray_cell_size, ray_mesh_shape = compute_ray_mesh(r_i, r_f, conf)
-                    a_vel = a_vel_next
-                    ray_cell_size_list.append(ray_cell_size)
-                    ray_mesh_shape_list.append(ray_mesh_shape)
-            return 
-        integrate_ray(
-            a_prev, a_next, cosmo, conf
-        )
-
-    # (number of K steps,) (number of K steps, 2)
-    return cosmo.replace(ray_cell_size_list=jnp.asarray(ray_cell_size_list), ray_mesh_shape_list=jnp.asarray(ray_mesh_shape_list))

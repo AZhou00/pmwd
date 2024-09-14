@@ -130,20 +130,20 @@ def observe(ray, obsvbl_ray, cosmo, conf):
     obsvbl_ray = kappa, gamma1, gamma2, omega
     return obsvbl_ray
 
-
-def nbody_ray_step(a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf, ray_mesh_KDK):
-    ray = integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf, ray_mesh_KDK)
+@partial(jit, static_argnums=(7, 8, 9))
+def nbody_ray_step(a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf, ray_cell_size, ray_mesh_shape_x, ray_mesh_shape_y):
+    ray = integrate_ray(a_prev, a_next, ptcl, ray, cosmo, conf, (ray_cell_size, (ray_mesh_shape_x, ray_mesh_shape_y)))
     obsvbl_ray = observe(ray, obsvbl_ray, cosmo, conf)
     return ray, obsvbl_ray
 
-def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
+
+def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, ray_mesh_params, static=False):
     """
     N-body time integration with ray tracing updates.
     ray tracing nbody integration goes backward by default
     """
     a_nbody = conf.a_nbody_rt  # in reverse order up the maximum source redshift
-    ray_cell_size_list, ray_mesh_shape_list = cosmo.ray_cell_size_list, cosmo.ray_mesh_shape_list
-
+    
     if not static:
         # initialize the acceleration to ptcl does not do anything else.
         ptcl, obsvbl = nbody_init(a_nbody[0], ptcl, obsvbl, cosmo, conf)
@@ -152,9 +152,10 @@ def nbody_ray(ptcl, ray, obsvbl, obsvbl_ray, cosmo, conf, static=False):
     ray, obsvbl_ray = nbody_ray_init(a_nbody[0], ray, obsvbl_ray, cosmo, conf)
 
     for i, (a_prev, a_next) in enumerate(zip(a_nbody[:-1], a_nbody[1:])):
-        ray_mesh_params = (ray_cell_size_list[i*2+1], tuple(ray_mesh_shape_list[i*2+1]))
+        ray_cell_size_list, ray_mesh_shape_list = ray_mesh_params
+        ray_cell_size, (ray_mesh_shape_x, ray_mesh_shape_y) = ray_cell_size_list[i*2+1], ray_mesh_shape_list[i*2+1]        
         ray, obsvbl_ray = nbody_ray_step(
-            a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf, ray_mesh_params
+            a_prev, a_next, ptcl, ray, obsvbl_ray, cosmo, conf, ray_cell_size, ray_mesh_shape_x, ray_mesh_shape_y
         )
         if not static:
             ptcl, obsvbl = nbody_step(a_prev, a_next, ptcl, obsvbl, cosmo, conf)

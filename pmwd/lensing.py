@@ -7,7 +7,7 @@ from pmwd.scatter import scatter, scatter_ray
 from pmwd.gather import gather_ray
 from pmwd.pm_util import fftfreq, fftfwd, fftinv
 from pmwd.boltzmann import chi_a, r_a, growth, growth_chi, a_chi
-from pmwd.ray_mesh import compute_ray_mesh, ray_mesh_center
+from pmwd.ray_mesh import ray_mesh_center
 from pmwd.sto.so import sotheta, pot_sharp, grad_sharp
 
 def deconv_tophat(kvec, width, field):
@@ -357,7 +357,7 @@ def lensing(a_i, a_f, a_c, ray, grad_phi3D, cosmo, conf, ray_mesh_params):
     # ray_cell_size, ray_mesh_shape = compute_ray_mesh(r_i, r_f, conf)
     
     ray_cell_size, ray_mesh_shape = ray_mesh_params
-    ray_mesh_shape = jnp.asarray(ray_mesh_shape, jnp.int32)
+    # ray_mesh_shape = jnp.asarray(ray_mesh_shape, jnp.int32)
     ray_mesh_shape = (ray_mesh_shape[0], ray_mesh_shape[1])
 
     offset = ray_mesh_center(ray_cell_size, ray_mesh_shape, dtype=conf.float_dtype)
