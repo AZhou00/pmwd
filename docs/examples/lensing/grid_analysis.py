@@ -1,5 +1,3 @@
-# Code copied and concatenated from the Miko project https://arxiv.org/abs/2312.08934 and https://arxiv.org/abs/2304.01387
-
 from functools import partial
 
 import jax.numpy as jnp
